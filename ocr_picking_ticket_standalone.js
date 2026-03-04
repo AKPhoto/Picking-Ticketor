@@ -1431,13 +1431,13 @@
     const settings = options || {};
     const wrapper = document.createElement('div');
     wrapper.style.position = 'fixed';
-    wrapper.style.left = '0';
+    wrapper.style.left = '-10000px';
     wrapper.style.top = '0';
     wrapper.style.width = 'fit-content';
     wrapper.style.padding = '8px 12px';
     wrapper.style.boxSizing = 'border-box';
     wrapper.style.overflow = 'visible';
-    wrapper.style.opacity = '0';
+    wrapper.style.opacity = '1';
     wrapper.style.pointerEvents = 'none';
     wrapper.style.zIndex = '-1';
     wrapper.style.background = '#fff';
