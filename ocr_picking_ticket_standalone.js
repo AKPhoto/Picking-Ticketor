@@ -23,6 +23,12 @@
     ticketNumbersReserved: false,
     currentRenderedTicketCount: 0,
     lastPreviewPayload: null,
+    lastSavePickerHandle: null,
+    logoDataUrl: '',
+    pdfQueueFiles: [],
+    pdfQueueIndex: -1,
+    activePdfFileName: '',
+    selectedTableRow: null,
     itemCodeDescriptionCatalog: {},
     itemCodeDescriptionCatalogLoaded: false,
     userItemCodeCatalog: {},
@@ -34,6 +40,7 @@
   const CRAFT_BY_ITEM_CODE_STORAGE_KEY = 'matcon_craft_by_item_code_v1';
   const LEARNING_FIELDS = ['pointNumber', 'itemCode', 'size', 'quantity'];
   const PLACEHOLDER_ITEM_CODE = 'PLACEHOLDER-CODE';
+  const PLACEHOLDER_DESCRIPTION_TEXT = 'UNRECOGNIZED ITEM CODE - DESCRIPTION REQUIRED';
   const ITEM_CODE_DESCRIPTION_FILE = 'item_code_descriptions.json';
 
   const SHEET_ORDER = ['Pipe', 'Fabrication', 'Erection', 'Supports'];
@@ -49,7 +56,10 @@
     revision: document.getElementById('revision'),
     ocrLanguage: document.getElementById('ocrLanguage'),
     pdfInput: document.getElementById('pdfInput'),
+    pdfFolderInput: document.getElementById('pdfFolderInput'),
     renderBtn: document.getElementById('renderBtn'),
+    loadFolderBtn: document.getElementById('loadFolderBtn'),
+    queueStatusBadge: document.getElementById('queueStatusBadge'),
     runOcrBtn: document.getElementById('runOcrBtn'),
     itemCount: document.getElementById('itemCount'),
     lockCanvasScroll: document.getElementById('lockCanvasScroll'),
@@ -65,6 +75,7 @@
     sizeColumnStatus: document.getElementById('sizeColumnStatus'),
     quantityColumnStatus: document.getElementById('quantityColumnStatus'),
     addRowBtn: document.getElementById('addRowBtn'),
+    deleteRowBtn: document.getElementById('deleteRowBtn'),
     generateBtn: document.getElementById('generateBtn'),
     exportPdfBtn: document.getElementById('exportPdfBtn'),
     reprintBtn: document.getElementById('reprintBtn'),
@@ -103,6 +114,66 @@
         resolve(blob);
       }, type || 'image/png', quality);
     });
+  }
+
+  async function loadLogoDataUrl() {
+    if (state.logoDataUrl) return state.logoDataUrl;
+    if (typeof window.AUREX_LOGO_DATA_URL === 'string' && window.AUREX_LOGO_DATA_URL.startsWith('data:image/')) {
+      state.logoDataUrl = window.AUREX_LOGO_DATA_URL;
+      return state.logoDataUrl;
+    }
+
+    try {
+      const response = await fetch('./Aurex%20Logo.jpg', { cache: 'no-store' });
+      if (!response.ok) return '';
+      const blob = await response.blob();
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('Failed to read logo file.'));
+        reader.readAsDataURL(blob);
+      });
+
+      state.logoDataUrl = String(dataUrl || '');
+      return state.logoDataUrl;
+    } catch (error) {
+      console.warn('Logo preload failed, using file path fallback.', error);
+      return '';
+    }
+  }
+
+  async function waitForImagesToLoad(container, timeoutMs) {
+    const root = container instanceof HTMLElement ? container : null;
+    if (!root) return;
+
+    const images = Array.from(root.querySelectorAll('img'));
+    if (!images.length) return;
+
+    const timeout = Math.max(500, Number(timeoutMs) || 5000);
+
+    await Promise.all(images.map((img) => new Promise((resolve) => {
+      if (img.complete && img.naturalWidth > 0) {
+        resolve();
+        return;
+      }
+
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        img.removeEventListener('load', onLoad);
+        img.removeEventListener('error', onError);
+        clearTimeout(timer);
+        resolve();
+      };
+
+      const onLoad = () => finish();
+      const onError = () => finish();
+      const timer = setTimeout(finish, timeout);
+
+      img.addEventListener('load', onLoad, { once: true });
+      img.addEventListener('error', onError, { once: true });
+    })));
   }
 
   function normalizeCatalogCodes(rawCodes) {
@@ -623,6 +694,50 @@
     });
   }
 
+  function setSelectedTableRow(row) {
+    elements.ocrTableBody.querySelectorAll('tr.row-selected').forEach((item) => {
+      item.classList.remove('row-selected');
+    });
+
+    if (!row) {
+      state.selectedTableRow = null;
+      if (elements.deleteRowBtn) {
+        elements.deleteRowBtn.disabled = true;
+      }
+      return;
+    }
+
+    state.selectedTableRow = row;
+    row.classList.add('row-selected');
+    if (elements.deleteRowBtn) {
+      elements.deleteRowBtn.disabled = false;
+    }
+  }
+
+  function deleteSelectedTableRow() {
+    const row = state.selectedTableRow;
+    if (!row || !row.parentNode) {
+      setStatus('Select a row in the table, then click Delete Selected Row.', true);
+      setSelectedTableRow(null);
+      return;
+    }
+
+    row.parentNode.removeChild(row);
+    setSelectedTableRow(null);
+    ensureTypeNames();
+
+    const hasRows = elements.ocrTableBody.querySelectorAll('tr').length > 0;
+    elements.generateBtn.disabled = !hasRows;
+    if (elements.exportPdfBtn) {
+      elements.exportPdfBtn.disabled = true;
+    }
+    if (elements.reprintBtn) {
+      elements.reprintBtn.disabled = true;
+    }
+
+    setStatus('Row deleted.', false);
+  }
+
   function addRow(data) {
     const rowIndex = elements.ocrTableBody.querySelectorAll('tr').length;
     const selectedType = data.type || getRememberedCraftTypeForItemCode(data.itemCode || '') || '';
@@ -645,6 +760,11 @@
     }
   }
 
+  function setDescriptionNeedsAttention(cell, needsAttention) {
+    if (!cell) return;
+    cell.classList.toggle('desc-needs-attention', Boolean(needsAttention));
+  }
+
   function updateMaterialDescriptionForTableRow(row) {
     const cells = row.querySelectorAll('td');
     const itemCode = cells[1]?.textContent.trim() || '';
@@ -654,7 +774,23 @@
     const matchedDescription = lookupDescriptionInCatalog(itemCode);
     if (matchedDescription) {
       descriptionCell.textContent = matchedDescription;
+      setDescriptionNeedsAttention(descriptionCell, false);
+      return;
     }
+
+    const currentDescription = String(descriptionCell.textContent || '').trim();
+    if (!itemCode) {
+      setDescriptionNeedsAttention(descriptionCell, false);
+      return;
+    }
+
+    if (!currentDescription) {
+      descriptionCell.textContent = PLACEHOLDER_DESCRIPTION_TEXT;
+      setDescriptionNeedsAttention(descriptionCell, true);
+      return;
+    }
+
+    setDescriptionNeedsAttention(descriptionCell, currentDescription === PLACEHOLDER_DESCRIPTION_TEXT);
   }
 
   function getRowCellValue(row, columnIndex) {
@@ -796,9 +932,18 @@
       const normalizedEntered = String(entered || '').trim();
       if (normalizedEntered && !isInvalidItemCode(normalizedEntered)) {
         itemCodeCell.textContent = normalizedEntered;
+        const matchedDescription = lookupDescriptionInCatalog(normalizedEntered);
+        if (cells[4]) {
+          cells[4].textContent = matchedDescription || PLACEHOLDER_DESCRIPTION_TEXT;
+          setDescriptionNeedsAttention(cells[4], !matchedDescription);
+        }
       } else {
         const placeholder = `${PLACEHOLDER_ITEM_CODE}-${String(index + 1).padStart(2, '0')}`;
         itemCodeCell.textContent = placeholder;
+        if (cells[4]) {
+          cells[4].textContent = PLACEHOLDER_DESCRIPTION_TEXT;
+          setDescriptionNeedsAttention(cells[4], true);
+        }
         placeholderCount += 1;
       }
 
@@ -884,9 +1029,7 @@
     const itemCode = cells[1]?.textContent.trim() || '';
     const size = cells[2]?.textContent.trim() || '';
     const quantity = cells[3]?.textContent.trim() || '';
-    const materialDescription = cells[4]?.textContent.trim() || '';
-    const projectNo = cells[5]?.textContent.trim() || '';
-    return Boolean(pointNumber || itemCode || size || quantity || materialDescription || projectNo);
+    return Boolean(pointNumber || itemCode || size || quantity);
   }
 
   function clearCraftMissingHighlights() {
@@ -1166,12 +1309,10 @@
     const isReprint = Boolean(settings.isReprint);
     const requestedNo = buildRequestedNumber(payload?.projectNo);
     const ticketNoLabel = isReprint ? `REPRINT: ${ticket.ticketNo}` : `${ticket.ticketNo}`;
-    const ticketNoColor = isReprint ? '#b91c1c' : '#111827';
+    const ticketNoColor = '#b91c1c';
     const paintSpec = computePaintSpec(ticket?.sheetName, payload?.operatingTemperature, payload?.insulationType);
-    const useInlineLogoFallback = window.location.protocol === 'file:';
-    const logoCellHtml = useInlineLogoFallback
-      ? '<span class="aurex-logo-fallback">Aurex</span>'
-      : '<span class="logo-mask" aria-hidden="true"></span><img src="Aurex Logo.jpg" alt="Aurex" class="aurex-logo" />';
+    const logoSrc = state.logoDataUrl || './Aurex%20Logo.jpg';
+    const logoCellHtml = `<span class="logo-frame"><img src="${logoSrc}" alt="Aurex" crossorigin="anonymous" class="aurex-logo" /></span>`;
 
     const rows = Array.isArray(settings.rows)
       ? settings.rows.slice(0, ROWS_PER_TICKET_PAGE)
@@ -1218,14 +1359,14 @@
           .ticket-root .sig-split td { border: none; text-align: center; vertical-align: middle; padding: 0 3px; background: transparent; }
           .ticket-root .sig-left-group { position: relative; }
           .ticket-root .sig-left-group::after { content: ''; position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; background: #111827; transform: translateX(-0.5px); }
-          .ticket-root .logo-cell { padding: 0; text-align: left; vertical-align: middle; position: relative; overflow: visible !important; }
-          .ticket-root .aurex-logo { display: block; position: absolute; left: 3px; top: -38px; width: 100px; height: 66px; object-fit: contain; z-index: 3; max-width: none; }
-          .ticket-root .logo-mask { position: absolute; left: 1px; top: -40px; width: 104px; height: 70px; background: #fff; z-index: 2; pointer-events: none; }
+          .ticket-root .logo-cell { padding: 2px 4px; text-align: left; vertical-align: middle; position: relative; overflow: visible !important; z-index: 20; background: #fff; }
+          .ticket-root .logo-frame { display: inline-flex; align-items: center; justify-content: flex-start; background: #fff; position: relative; z-index: 21; padding: 0; min-height: 42px; }
+          .ticket-root .aurex-logo { display: block; width: 106px; height: 40px; object-fit: contain; max-width: none; position: relative; z-index: 22; opacity: 1 !important; filter: none !important; mix-blend-mode: normal; }
           .ticket-root .aurex-logo-fallback { display: inline-block; position: relative; top: -6px; left: 2px; font-family: Arial, sans-serif; font-size: 18px; font-weight: 700; letter-spacing: 0.2px; color: #111827; }
           .ticket-root .input-cell { background: #fbfdff; text-align: center; vertical-align: middle; padding-top: 0; padding-bottom: 0; font-weight: 700; }
           .ticket-root .left-red { text-align: left; color: #b91c1c; }
           .ticket-root .center-red { color: #b91c1c; }
-          .ticket-root .ticket-no { text-align: center; color: ${ticketNoColor}; font-weight: ${isReprint ? '700' : '400'}; }
+          .ticket-root .ticket-no { text-align: center; color: ${ticketNoColor}; font-weight: 700; }
         </style>
         <div class="sheet-wrap">
           <table class="sheet" aria-label="Picking Ticket">
@@ -1241,7 +1382,7 @@
 
             <tr style="height: 20px;" class="top-band"><td colspan="7"></td></tr>
             <tr style="height: 20px;" class="top-band"><td colspan="7"></td></tr>
-            <tr style="height: 20px;" class="top-band">
+            <tr style="height: 46px;" class="top-band">
               <td colspan="2" class="logo-cell">${logoCellHtml}</td>
               <td colspan="3" class="picking-title">Picking Ticket</td>
               <td colspan="2" class="page-title">Page ${pageNumber}&nbsp;&nbsp;of&nbsp;&nbsp;${pageCount}</td>
@@ -1253,14 +1394,14 @@
               <td class="hdr">Requested No.</td>
               <td class="hdr">Paint Spec:</td>
               <td class="hdr">Picking Ticket No.</td>
-              <td colspan="2" class="hdr">Date</td>
+              <td colspan="2" class="hdr"></td>
             </tr>
             <tr style="height: 26px;" class="craft-input-row">
               <td colspan="2" class="input-cell">${escapeHtml(ticket.craftLabel)}</td>
               <td class="input-cell left-red">${escapeHtml(requestedNo)}</td>
               <td class="input-cell">${escapeHtml(paintSpec)}</td>
               <td class="input-cell ticket-no">${escapeHtml(ticketNoLabel)}</td>
-              <td colspan="2" class="input-cell">${escapeHtml(new Date().toLocaleDateString())}</td>
+              <td colspan="2" class="input-cell"></td>
             </tr>
 
             <tr style="height: 16px;" class="major-row project-row">
@@ -1291,7 +1432,7 @@
             ${dataRowsHtml}
 
             <tr style="height: 17px;" class="major-row signature-title">
-              <td colspan="7" class="hdr">Signature and Date</td>
+              <td colspan="7" class="hdr">Signature</td>
             </tr>
             <tr style="height: 16px;" class="sig-label-row">
               <td colspan="5" class="sig-left-group" style="padding: 0;">
@@ -1415,9 +1556,8 @@
       return null;
     }
 
-    alert('Select the main output folder. PDFs will be saved under a "Picking Tickets" subfolder.');
-    const mainHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-    return mainHandle.getDirectoryHandle('Picking Tickets', { create: true });
+    alert('Select the default folder for PDF Save As dialogs. You can still change location/file name each time.');
+    return await window.showDirectoryPicker({ mode: 'readwrite' });
   }
 
   async function saveBlobToDirectory(handle, filename, blob) {
@@ -1427,8 +1567,35 @@
     await writable.close();
   }
 
+  async function saveBlobWithSaveDialog(blob, filename, startInHandle) {
+    if (typeof window.showSaveFilePicker !== 'function') {
+      return null;
+    }
+
+    const pickerOptions = {
+      suggestedName: filename,
+      types: [
+        {
+          description: 'PDF Document',
+          accept: { 'application/pdf': ['.pdf'] }
+        }
+      ]
+    };
+
+    if (startInHandle) {
+      pickerOptions.startIn = startInHandle;
+    }
+
+    const fileHandle = await window.showSaveFilePicker(pickerOptions);
+    const writable = await fileHandle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    return fileHandle;
+  }
+
   async function renderTicketPageCanvas(payload, ticket, pageRows, pageNumber, pageCount, options) {
     const settings = options || {};
+    await loadLogoDataUrl();
     const wrapper = document.createElement('div');
     wrapper.style.position = 'fixed';
     wrapper.style.left = '-10000px';
@@ -1447,19 +1614,19 @@
       pageCount,
       isReprint: Boolean(settings.isReprint)
     });
+    const dateCell = wrapper.querySelector('.ticket-root .craft-input-row td:last-child');
+    if (dateCell) {
+      dateCell.textContent = '';
+    }
     document.body.appendChild(wrapper);
 
     try {
       await new Promise((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve)));
+      await waitForImagesToLoad(wrapper, 6000);
       return await window.html2canvas(wrapper, {
         scale: 2,
         useCORS: true,
-        backgroundColor: '#ffffff',
-        onclone: (clonedDoc) => {
-          clonedDoc.querySelectorAll('img').forEach((img) => {
-            img.remove();
-          });
-        }
+        backgroundColor: '#ffffff'
       });
     } finally {
       document.body.removeChild(wrapper);
@@ -1517,12 +1684,12 @@
     const settings = options || {};
     if (!payload?.tickets?.length) {
       setStatus('Generate picking tickets before exporting PDFs.', true);
-      return;
+      return false;
     }
 
     if (!window.jspdf || !window.jspdf.jsPDF || !window.html2canvas) {
       setStatus('PDF export library not loaded (jsPDF/html2canvas).', true);
-      return;
+      return false;
     }
 
     const exportLabel = settings.isReprint ? 'reprint PDF(s)' : 'craft PDF(s)';
@@ -1530,13 +1697,21 @@
     setStatus(`Exporting ${payload.tickets.length} ${exportLabel} from HTML...`, false);
 
     let outputFolderHandle = null;
+    let saveDialogStartHandle = state.lastSavePickerHandle || null;
     if (settings.preferDirectoryPicker) {
       try {
-        outputFolderHandle = await pickOutputFolder();
+        if (typeof window.showSaveFilePicker === 'function') {
+          if (!saveDialogStartHandle) {
+            saveDialogStartHandle = await pickOutputFolder();
+            state.lastSavePickerHandle = saveDialogStartHandle;
+          }
+        } else {
+          outputFolderHandle = await pickOutputFolder();
+        }
       } catch (error) {
         if (error?.name === 'AbortError') {
           setStatus('PDF export canceled while selecting folders.', true);
-          return;
+          return false;
         }
         console.warn('Folder picker unavailable, using download fallback.', error);
         outputFolderHandle = null;
@@ -1547,7 +1722,21 @@
       const blob = await buildPdfBlobFromTicket(payload, ticket, { isReprint: Boolean(settings.isReprint) });
       const filename = buildTicketPdfFilename(payload, ticket);
 
-      if (outputFolderHandle) {
+      if (settings.preferDirectoryPicker && typeof window.showSaveFilePicker === 'function') {
+        try {
+          const chosenFileHandle = await saveBlobWithSaveDialog(blob, filename, saveDialogStartHandle);
+          if (chosenFileHandle) {
+            saveDialogStartHandle = chosenFileHandle;
+            state.lastSavePickerHandle = chosenFileHandle;
+          }
+        } catch (error) {
+          if (error?.name === 'AbortError') {
+            setStatus('PDF export canceled in Save As dialog.', true);
+            return false;
+          }
+          throw error;
+        }
+      } else if (outputFolderHandle) {
         await saveBlobToDirectory(outputFolderHandle, filename, blob);
       } else {
         triggerDownload(blob, filename);
@@ -1560,13 +1749,14 @@
         ? `Reprint complete: PDFs saved to the Picking Tickets folder. Crafts: ${exportedCraftList}.`
         : `Export complete: PDFs saved to the Picking Tickets folder. Crafts: ${exportedCraftList}.`;
       setStatus(doneText, false);
-      return;
+      return true;
     }
 
     const fallbackText = settings.isReprint
       ? `Reprint complete: browser fallback used (filenames include craft suffix). Crafts: ${exportedCraftList}.`
       : `Export complete: browser fallback used (filenames include craft suffix). Crafts: ${exportedCraftList}.`;
     setStatus(fallbackText, false);
+    return true;
   }
 
   function getItemCodeCandidates(value) {
@@ -1611,24 +1801,61 @@
     URL.revokeObjectURL(url);
   }
 
+  function getQueueProgressLabel() {
+    const total = state.pdfQueueFiles.length;
+    const index = state.pdfQueueIndex;
+    if (!total || index < 0) return '';
+    return ` [Drawing ${index + 1}/${total}]`;
+  }
 
-  async function renderFirstPage() {
-    const file = elements.pdfInput.files[0];
+  function updateQueueStatusBadge() {
+    if (!elements.queueStatusBadge) return;
+    const total = state.pdfQueueFiles.length;
+    const index = state.pdfQueueIndex;
+    if (!total || index < 0) {
+      elements.queueStatusBadge.style.display = 'none';
+      return;
+    }
+
+    elements.queueStatusBadge.textContent = `Queue: Drawing ${index + 1}/${total}`;
+    elements.queueStatusBadge.style.display = 'inline-flex';
+  }
+
+  function clearTicketWorkspaceForNextDrawing() {
+    elements.ocrTableBody.innerHTML = '';
+    setSelectedTableRow(null);
+    clearCraftMissingHighlights();
+    elements.generateBtn.disabled = true;
+    if (elements.exportPdfBtn) elements.exportPdfBtn.disabled = true;
+    if (elements.reprintBtn) elements.reprintBtn.disabled = true;
+    elements.previewCraftSelect.innerHTML = '';
+    elements.previewCraftSelect.disabled = true;
+    elements.openPreviewWindowBtn.disabled = true;
+    elements.ticketPreviewContainer.innerHTML = 'Generate picking tickets to load preview.';
+    state.lastPreviewPayload = null;
+    state.ticketNumbersReserved = false;
+    state.currentRenderedTicketCount = 0;
+  }
+
+  async function loadPdfFile(file, options) {
+    const settings = options || {};
     if (!file) {
       setStatus('Select a PDF file first.', true);
-      return;
+      return false;
     }
 
     if (!window.pdfjsLib) {
       setStatus('PDF.js not loaded.', true);
-      return;
+      return false;
     }
 
     try {
-      setStatus('Loading PDF...', false);
+      setStatus(`Loading PDF: ${file.name}${getQueueProgressLabel()}...`, false);
+      clearTicketWorkspaceForNextDrawing();
       const buffer = await file.arrayBuffer();
       state.pdfDoc = await window.pdfjsLib.getDocument({ data: buffer }).promise;
       state.page = await state.pdfDoc.getPage(1);
+      state.activePdfFileName = file.name || '';
       state.scale = 1.6;
       await renderPageAtScale(state.scale);
       state.selection = null;
@@ -1638,11 +1865,71 @@
       setColumnButtonsEnabled(false);
       activateOcrAreaSelectionMode();
       updateColumnStatus();
-      setStatus('PDF loaded. First select OCR Area and drag a block around the table. The app will auto-zoom; then capture each required column.', false);
+
+      if (settings.fromQueue) {
+        setStatus(`Loaded ${file.name}${getQueueProgressLabel()}. Select OCR area/columns, run OCR, generate, then export to continue queue.`, false);
+      } else {
+        setStatus('PDF loaded. First select OCR Area and drag a block around the table. The app will auto-zoom; then capture each required column.', false);
+      }
+      return true;
     } catch (error) {
       console.error(error);
       setStatus(`Failed to load PDF: ${error.message}`, true);
+      return false;
     }
+  }
+
+  function cancelPdfQueue() {
+    state.pdfQueueFiles = [];
+    state.pdfQueueIndex = -1;
+    updateQueueStatusBadge();
+  }
+
+  async function startPdfQueueFromFolder(fileList) {
+    const source = Array.from(fileList || []);
+    const pdfFiles = source
+      .filter((file) => file && /\.pdf$/i.test(file.name || ''))
+      .sort((a, b) => (a.webkitRelativePath || a.name || '').localeCompare(b.webkitRelativePath || b.name || '', undefined, { numeric: true, sensitivity: 'base' }));
+
+    if (!pdfFiles.length) {
+      setStatus('No PDF files found in the selected folder.', true);
+      return;
+    }
+
+    state.pdfQueueFiles = pdfFiles;
+    state.pdfQueueIndex = 0;
+    updateQueueStatusBadge();
+    const loaded = await loadPdfFile(pdfFiles[0], { fromQueue: true });
+    if (!loaded) {
+      cancelPdfQueue();
+    }
+  }
+
+  async function loadNextPdfInQueueIfAvailable() {
+    const total = state.pdfQueueFiles.length;
+    if (!total || state.pdfQueueIndex < 0) {
+      return false;
+    }
+
+    const nextIndex = state.pdfQueueIndex + 1;
+    if (nextIndex >= total) {
+      setStatus('Queue complete: all selected folder PDFs have been processed.', false);
+      cancelPdfQueue();
+      return false;
+    }
+
+    state.pdfQueueIndex = nextIndex;
+    updateQueueStatusBadge();
+    const nextFile = state.pdfQueueFiles[nextIndex];
+    await loadPdfFile(nextFile, { fromQueue: true });
+    return true;
+  }
+
+
+  async function renderFirstPage() {
+    const file = elements.pdfInput.files[0];
+    cancelPdfQueue();
+    await loadPdfFile(file, { fromQueue: false });
   }
 
   function viewerPoint(clientX, clientY) {
@@ -1855,6 +2142,7 @@
       const correctedWithDescriptions = applyMaterialDescriptions(corrected);
 
       elements.ocrTableBody.innerHTML = '';
+      setSelectedTableRow(null);
       correctedWithDescriptions.forEach((row) => addRow(row));
       elements.generateBtn.disabled = false;
       if (elements.reprintBtn) {
@@ -1888,6 +2176,15 @@
   }
 
   elements.renderBtn.addEventListener('click', renderFirstPage);
+  elements.loadFolderBtn?.addEventListener('click', () => {
+    if (!elements.pdfFolderInput) return;
+    elements.pdfFolderInput.value = '';
+    elements.pdfFolderInput.click();
+  });
+  elements.pdfFolderInput?.addEventListener('change', async () => {
+    const files = elements.pdfFolderInput.files;
+    await startPdfQueueFromFolder(files);
+  });
   elements.selectOcrAreaBtn.addEventListener('click', activateOcrAreaSelectionMode);
   elements.resetOcrAreaBtn.addEventListener('click', () => {
     resetOcrAreaAndZoom().catch((error) => {
@@ -1906,13 +2203,29 @@
   }, { passive: false });
 
   elements.runOcrBtn.addEventListener('click', runOcrOnSelection);
-  elements.addRowBtn.addEventListener('click', () => addRow({}));
+  elements.addRowBtn.addEventListener('click', () => {
+    const rowsBefore = elements.ocrTableBody.querySelectorAll('tr').length;
+    addRow({});
+    const addedRow = elements.ocrTableBody.querySelectorAll('tr')[rowsBefore];
+    if (addedRow) {
+      setSelectedTableRow(addedRow);
+    }
+  });
+  elements.deleteRowBtn?.addEventListener('click', deleteSelectedTableRow);
+  elements.ocrTableBody.addEventListener('click', (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const row = target.closest('tr');
+    if (!row) return;
+    setSelectedTableRow(row);
+  });
   elements.ocrTableBody.addEventListener('input', (event) => {
     const cell = event.target;
     if (!(cell instanceof HTMLElement) || cell.tagName !== 'TD') return;
 
     const row = cell.closest('tr');
     if (!row) return;
+    setSelectedTableRow(row);
 
     const cells = Array.from(row.querySelectorAll('td'));
     const columnIndex = cells.indexOf(cell);
@@ -1924,6 +2237,9 @@
       if (selectedType) {
         rememberCraftTypeForItemCode(cell.textContent.trim(), selectedType);
       }
+    } else if (columnIndex === 4) {
+      const cleanDescription = String(cell.textContent || '').trim();
+      setDescriptionNeedsAttention(cell, cleanDescription === PLACEHOLDER_DESCRIPTION_TEXT || !cleanDescription);
     }
 
     if (elements.exportPdfBtn) {
@@ -1940,6 +2256,7 @@
 
     const row = target.closest('tr');
     if (!row) return;
+    setSelectedTableRow(row);
 
     const itemCode = row.querySelectorAll('td')[1]?.textContent.trim() || '';
     if (itemCode) {
@@ -2019,7 +2336,10 @@
     }
 
     try {
-      await exportCraftPdfsFromHtml(payload, { isReprint: false, preferDirectoryPicker: false });
+      const success = await exportCraftPdfsFromHtml(payload, { isReprint: false, preferDirectoryPicker: true });
+      if (success) {
+        await loadNextPdfInQueueIfAvailable();
+      }
     } catch (error) {
       console.error(error);
       setStatus(`Automatic PDF export failed: ${error.message}`, true);
@@ -2032,7 +2352,10 @@
     }
 
     try {
-      await exportCraftPdfsFromHtml(state.lastPreviewPayload, { isReprint: false, preferDirectoryPicker: true });
+      const success = await exportCraftPdfsFromHtml(state.lastPreviewPayload, { isReprint: false, preferDirectoryPicker: true });
+      if (success) {
+        await loadNextPdfInQueueIfAvailable();
+      }
     } catch (error) {
       console.error(error);
       setStatus(`HTML PDF export failed: ${error.message}`, true);
