@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MatCon Standalone OCR Picking Ticket Creator</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f8fafc; margin: 0; color: #0f172a; }
+    .container { max-width: 1280px; margin: 0 auto; padding: 1rem; }
+    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+    .row { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0.75rem; }
+    .field { display: flex; flex-direction: column; gap: 0.3rem; }
+    .field label { font-size: 0.85rem; color: #475569; }
+    .field input, .field select { border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.5rem 0.6rem; font-size: 0.9rem; }
+    .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    button { border: 1px solid #1d4ed8; background: #2563eb; color: #fff; border-radius: 6px; padding: 0.5rem 0.9rem; cursor: pointer; font-size: 0.9rem; }
+    button.secondary { background: #fff; color: #1e293b; border-color: #94a3b8; }
+    button.column-btn.active { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #viewerWrap { position: relative; border: 1px solid #cbd5e1; border-radius: 8px; overflow: auto; max-height: 70vh; background: #fff; }
+    #pdfCanvas { display: block; max-width: none; }
+    #selectionOverlay { position: absolute; border: 2px dashed #dc2626; background: rgba(220, 38, 38, 0.15); pointer-events: none; display: none; }
+    .status { font-size: 0.9rem; color: #334155; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th, td { border: 1px solid #e2e8f0; padding: 0.45rem; vertical-align: top; }
+    td[contenteditable="true"] { background: #f8fafc; }
+    #ocrTable tbody tr.craft-missing td { background: #fef2f2; }
+    .ticket { border: 2px solid #667eea; border-radius: 8px; margin-bottom: 1rem; background: #fff; overflow: hidden; }
+    .ticketHeader { background: #667eea; color: #fff; padding: 0.75rem; font-weight: 700; }
+    .ticketBody { padding: 0.75rem; }
+    .typeCell { min-width: 160px; }
+    .typeCell label { display: block; font-size: 0.78rem; line-height: 1.3; }
+    .preview-tools { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.8rem; }
+    .preview-tools select { border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.45rem 0.55rem; font-size: 0.9rem; }
+    .excel-ticket { border: 1px solid #1e293b; background: #fff; padding: 10px; width: 740px; max-width: 100%; }
+    .excel-ticket .sheet-title { font-weight: 700; text-align: center; font-size: 16px; margin-bottom: 4px; }
+    .excel-ticket .sheet-subtitle { text-align: center; font-size: 11px; margin-bottom: 8px; }
+    .excel-ticket table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 10px; }
+    .excel-ticket td, .excel-ticket th { border: 1px solid #000; padding: 2px 4px; vertical-align: middle; word-wrap: break-word; }
+    .excel-ticket .center { text-align: center; }
+    .excel-ticket .right { text-align: right; }
+    .excel-ticket .bold { font-weight: 700; }
+    .excel-ticket .small { font-size: 9px; }
+    .excel-ticket .h28 td { height: 28px; }
+    .excel-ticket .h22 td { height: 22px; }
+    .excel-ticket .h18 td { height: 18px; }
+    .preview-wrap { overflow-x: auto; }
+    @media (max-width: 1024px) { .row { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 640px) { .row { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>MatCon Standalone OCR + Picking Ticket</h1>
+
+    <div class="card">
+      <div class="row">
+        <div class="field"><label>Project No</label><input id="projectNo" placeholder="e.g. AZAC149"></div>
+        <div class="field"><label>Starting Ticket No</label><input id="ticketStartNo" type="number" min="1" step="1" placeholder="e.g. 930"></div>
+        <div class="field"><label>Workpack</label><input id="workpackNo" placeholder="e.g. WP1"></div>
+        <div class="field"><label>Drawing Number</label><input id="drawingNumber" placeholder="e.g. SDY-237-XX14AAB-D"></div>
+        <div class="field"><label>Operating Temperature</label><input id="operatingTemperature" type="number" step="1" placeholder="e.g. 40"></div>
+        <div class="field"><label>Insulation Type</label><input id="insulationType" placeholder="e.g. None"></div>
+        <div class="field"><label>Sheet No</label><input id="sheetNo" placeholder="e.g. 006"></div>
+      </div>
+      <div class="row" style="margin-top:0.6rem;">
+        <div class="field"><label>Revision</label><input id="revision" placeholder="e.g. 01"></div>
+        <div class="field"><label>OCR Language</label><input id="ocrLanguage" value="eng"></div>
+        <div class="field"><label>PDF File</label><input id="pdfInput" type="file" accept="application/pdf,.pdf"></div>
+      </div>
+      <div class="actions" style="margin-top:0.8rem;">
+        <button id="renderBtn" class="secondary">Load PDF</button>
+        <button id="addRowBtn" class="secondary">Add Row</button>
+      </div>
+      <div class="card" style="margin-top:0.8rem;margin-bottom:0;">
+        <div class="field" style="max-width:220px;">
+          <label>Expected Item Count</label>
+          <input id="itemCount" type="number" min="1" value="1">
+        </div>
+        <div class="field" style="max-width:220px;margin-top:0.5rem;">
+          <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
+            <input id="lockCanvasScroll" type="checkbox">
+            <span>Lock Scroll</span>
+          </label>
+        </div>
+        <div class="actions" style="margin-top:0.7rem;">
+          <button id="selectOcrAreaBtn" class="secondary column-btn">Select OCR Area</button>
+          <button id="resetOcrAreaBtn" class="secondary">Reset OCR Area / Zoom</button>
+          <button id="selectPointColumnBtn" class="secondary column-btn">Select Point Number Column</button>
+          <button id="selectItemCodeColumnBtn" class="secondary column-btn">Select Item Code Column</button>
+          <button id="selectSizeColumnBtn" class="secondary column-btn">Select Size Column</button>
+          <button id="selectQuantityColumnBtn" class="secondary column-btn">Select Quantity Column</button>
+          <button id="runOcrBtn" disabled>Run OCR from Columns</button>
+        </div>
+        <div style="margin-top:0.6rem;font-size:0.85rem;color:#334155;display:flex;gap:0.8rem;flex-wrap:wrap;">
+          <span id="ocrAreaStatus">OCR Area: Not selected</span>
+          <span id="pointColumnStatus">Point: Not selected</span>
+          <span id="itemCodeColumnStatus">Item Code: Not selected</span>
+          <span id="sizeColumnStatus">Size: Not selected</span>
+          <span id="quantityColumnStatus">Quantity: Not selected</span>
+        </div>
+      </div>
+      <div id="status" class="status" style="margin-top:0.6rem;">Load a PDF, drag-select table area, run OCR, then generate tickets.</div>
+    </div>
+
+    <div class="card">
+      <div id="viewerWrap">
+        <canvas id="pdfCanvas"></canvas>
+        <div id="selectionOverlay"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Editable OCR Results</h3>
+      <table id="ocrTable">
+        <thead>
+          <tr>
+            <th>Point Number</th>
+            <th>Item Code</th>
+            <th>Size</th>
+            <th>Quantity</th>
+            <th>Material Description</th>
+            <th>Project No</th>
+            <th class="typeCell">Type</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div class="actions" style="margin-top:0.8rem;">
+        <button id="generateBtn" disabled>Generate Picking Tickets</button>
+        <button id="exportPdfBtn" class="secondary" disabled>Export Craft PDFs (HTML)</button>
+        <button id="reprintBtn" class="secondary" disabled>Reprint Last Tickets</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Ticket Template Preview (All Crafts)</h3>
+      <div class="preview-tools">
+        <label for="previewCraftSelect" style="font-size:0.9rem;color:#334155;">Craft Ticket:</label>
+        <select id="previewCraftSelect" disabled></select>
+        <button id="openPreviewWindowBtn" class="secondary" disabled>Open Print Preview</button>
+      </div>
+      <div id="ticketPreviewContainer" class="preview-wrap" style="color:#475569;font-size:0.9rem;">Generate picking tickets to load preview.</div>
+    </div>
+  </div>
+
+  <script src="pdf.min.js"></script>
+  <script src="tesseract.min.js"></script>
+  <script src="html2canvas.min.js"></script>
+  <script src="jspdf.umd.min.js"></script>
+  <script src="jspdf.plugin.autotable.min.js"></script>
+  <script src="ocr_picking_ticket_standalone.js"></script>
+</body>
+</html>

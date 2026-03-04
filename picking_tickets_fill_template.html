@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Picking Tickets Fill Template (HTML)</title>
+  <style>
+    @page {
+      size: A4 portrait;
+      margin: 10mm;
+    }
+
+    body {
+      margin: 0;
+      padding: 24px;
+      background: #f8fafc;
+      font-family: Calibri, Arial, sans-serif;
+      color: #111827;
+    }
+
+    .sheet-wrap {
+      width: 616px;
+      margin: 0 auto;
+      background: #fff;
+      border: 0;
+      box-shadow: none;
+      padding: 0;
+    }
+
+    table.sheet {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-size: 11px;
+      line-height: 1.05;
+      border: 1.5px solid #111827;
+    }
+
+    .sheet td {
+      border: 1px solid #111827;
+      padding: 1px 3px;
+      vertical-align: middle;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      background: #fff;
+    }
+
+    .hdr {
+      font-weight: 700;
+      text-align: center;
+      vertical-align: middle;
+    }
+    .center { text-align: center; }
+    .right { text-align: right; }
+
+    .major-row td {
+      border-top-width: 1.5px;
+      border-bottom-width: 1.5px;
+    }
+
+    .table-head td {
+      border-top-width: 1.5px;
+      border-bottom-width: 1.5px;
+      background: #B8CCE4;
+    }
+
+    .wrap-head {
+      white-space: normal !important;
+      text-overflow: clip !important;
+      word-break: normal;
+      overflow-wrap: anywhere;
+      line-height: 1.1;
+      text-align: center;
+    }
+
+    .top-band td {
+      border: none;
+      background: #fff;
+    }
+
+    .picking-title {
+      background: #B8CCE4 !important;
+      border: none !important;
+      font-weight: 700;
+      font-family: Arial, sans-serif;
+      font-size: 10pt;
+      text-align: center;
+    }
+
+    .page-title {
+      font-family: Arial, sans-serif;
+      font-size: 10pt;
+      font-weight: 700;
+      text-align: center;
+    }
+
+    .craft-row td {
+      font-family: Arial, sans-serif;
+      font-size: 8pt;
+      font-weight: 700;
+      text-align: center;
+      vertical-align: middle;
+      border-bottom: none;
+    }
+
+    .craft-input-row td {
+      border-top: none;
+    }
+
+    .project-row td {
+      border-bottom: none;
+    }
+
+    .project-input-row td {
+      border-top: none;
+    }
+
+    .signature-title td {
+      background: #B8CCE4;
+    }
+
+    .sig-label-row td {
+      border-bottom: none;
+    }
+
+    .sig-input-row td {
+      border-top: none;
+    }
+
+    .sig-split {
+      width: 100%;
+      height: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    .sig-split td {
+      border: none;
+      text-align: center;
+      vertical-align: middle;
+      padding: 0 3px;
+      background: transparent;
+    }
+
+    .sig-split td + td {
+      border-left: 1px solid #111827;
+    }
+
+    .sig-left-group {
+      position: relative;
+    }
+
+    .sig-left-group::after {
+      content: "";
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 50%;
+      width: 1px;
+      background: #111827;
+      transform: translateX(-0.5px);
+      pointer-events: none;
+    }
+
+    .logo-cell {
+      padding: 0;
+      text-align: left;
+      vertical-align: middle;
+      position: relative;
+      overflow: visible !important;
+    }
+
+    .aurex-logo {
+      display: block;
+      position: absolute;
+      left: 3px;
+      top: -38px;
+      width: 100px;
+      height: 66px;
+      object-fit: contain;
+      z-index: 3;
+      max-width: none;
+    }
+
+    .logo-mask {
+      position: absolute;
+      left: 1px;
+      top: -40px;
+      width: 104px;
+      height: 70px;
+      background: #fff;
+      z-index: 2;
+      pointer-events: none;
+    }
+
+    .input-cell {
+      background: #fbfdff;
+      text-align: center;
+      vertical-align: middle;
+      padding-top: 0;
+      padding-bottom: 0;
+    }
+
+    .input-cell[contenteditable="true"] {
+      line-height: 24px;
+    }
+
+    .table-head ~ tr td.input-cell[contenteditable="true"] {
+      font-weight: 700;
+    }
+
+    .muted {
+      color: #6b7280;
+      font-size: 11px;
+      margin-top: 10px;
+    }
+
+    @media print {
+      body {
+        padding: 0;
+        background: #fff;
+      }
+
+      .sheet-wrap {
+        width: 100%;
+      }
+
+      .muted {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="sheet-wrap">
+    <table class="sheet" aria-label="Picking Tickets Fill Template">
+      <colgroup>
+        <col style="width: 56px;" />
+        <col style="width: 74px;" />
+        <col style="width: 82px;" />
+        <col style="width: 68px;" />
+        <col style="width: 192px;" />
+        <col style="width: 60px;" />
+        <col style="width: 84px;" />
+      </colgroup>
+
+      <tr style="height: 20px;" class="top-band"><td colspan="7"></td></tr>
+      <tr style="height: 20px;" class="top-band"><td colspan="7"></td></tr>
+
+      <tr style="height: 20px;" class="top-band">
+        <td colspan="2" class="logo-cell"><span class="logo-mask" aria-hidden="true"></span><img src="Aurex Logo.jpg" alt="Aurex" class="aurex-logo" /></td>
+        <td></td>
+        <td colspan="2" class="picking-title">Picking Ticket</td>
+        <td colspan="2" class="page-title">Page&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;of</td>
+      </tr>
+
+      <tr style="height: 11px;" class="top-band"><td colspan="7"></td></tr>
+
+      <tr style="height: 15px;" class="major-row craft-row">
+        <td colspan="2" class="hdr">Craft</td>
+        <td class="hdr">Requested No.</td>
+        <td class="hdr">Paint Spec:</td>
+        <td class="hdr">Picking Ticket No.</td>
+        <td colspan="2" class="hdr">Date</td>
+      </tr>
+
+      <tr style="height: 26px;" class="craft-input-row">
+        <td colspan="2" class="input-cell" contenteditable="true"></td>
+        <td class="input-cell" contenteditable="true"></td>
+        <td class="input-cell" contenteditable="true"></td>
+        <td class="input-cell" contenteditable="true"></td>
+        <td colspan="2" class="input-cell" contenteditable="true"></td>
+      </tr>
+
+      <tr style="height: 16px;" class="major-row project-row">
+        <td colspan="3" class="hdr">Project No. &amp; Contract No.</td>
+        <td class="hdr">Work Pack</td>
+        <td class="hdr">Drawing No.</td>
+        <td class="hdr">Sht</td>
+        <td class="hdr">Rev</td>
+      </tr>
+
+      <tr style="height: 26px;" class="project-input-row">
+        <td colspan="3" class="input-cell" contenteditable="true"></td>
+        <td class="input-cell" contenteditable="true"></td>
+        <td class="input-cell" contenteditable="true"></td>
+        <td class="input-cell" contenteditable="true"></td>
+        <td class="input-cell" contenteditable="true"></td>
+      </tr>
+
+      <tr style="height: 42px;" class="table-head">
+        <td class="hdr wrap-head">Drawing Item No.</td>
+        <td class="hdr wrap-head">Item Code or Tag No,</td>
+        <td class="hdr">Size</td>
+        <td class="hdr wrap-head">Quantity Required</td>
+        <td class="hdr">Material Description</td>
+        <td class="hdr wrap-head">Quantity Issued</td>
+        <td class="hdr">Heat Number</td>
+      </tr>
+
+      <tr style="height: 26px;"><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td></tr>
+      <tr style="height: 26px;"><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td></tr>
+      <tr style="height: 26px;"><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td></tr>
+      <tr style="height: 26px;"><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td></tr>
+      <tr style="height: 26px;"><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td></tr>
+      <tr style="height: 26px;"><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td></tr>
+      <tr style="height: 26px;"><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td></tr>
+      <tr style="height: 26px;"><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td></tr>
+      <tr style="height: 26px;"><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td></tr>
+      <tr style="height: 26px;"><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td></tr>
+      <tr style="height: 26px;"><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td></tr>
+      <tr style="height: 26px;"><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td></tr>
+      <tr style="height: 26px;"><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td></tr>
+      <tr style="height: 26px;"><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td></tr>
+      <tr style="height: 26px;"><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td></tr>
+      <tr style="height: 26px;"><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td></tr>
+      <tr style="height: 26px;"><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td></tr>
+      <tr style="height: 26px;"><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td></tr>
+      <tr style="height: 26px;"><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td></tr>
+      <tr style="height: 26px;"><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td></tr>
+      <tr style="height: 26px;"><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td></tr>
+      <tr style="height: 26px;"><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td></tr>
+      <tr style="height: 26px;"><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell"></td><td class="input-cell" contenteditable="true"></td><td class="input-cell" contenteditable="true"></td></tr>
+
+      <tr style="height: 17px;" class="major-row signature-title">
+        <td colspan="7" class="hdr">Signature and Date</td>
+      </tr>
+
+      <tr style="height: 16px;" class="sig-label-row">
+        <td colspan="5" class="sig-left-group" style="padding: 0;">
+          <table class="sig-split" aria-hidden="true">
+            <tr>
+              <td class="hdr">Approved:</td>
+              <td class="hdr">Issued By:</td>
+            </tr>
+          </table>
+        </td>
+        <td colspan="2" class="hdr">Received By:</td>
+      </tr>
+
+      <tr style="height: 46px;" class="sig-input-row">
+        <td colspan="5" class="sig-left-group" style="padding: 0;">
+          <table class="sig-split" aria-hidden="true">
+            <tr>
+              <td class="input-cell"></td>
+              <td class="input-cell"></td>
+            </tr>
+          </table>
+        </td>
+        <td colspan="2" class="input-cell"></td>
+      </tr>
+    </table>
+
+    <div class="muted">
+      Template recreated from <strong>Picking Tickets Fill.xlsx</strong> (sheet: <strong>Supports</strong>) with matched column widths, merged headers, and input-cell placement.
+    </div>
+  </div>
+</body>
+</html>
