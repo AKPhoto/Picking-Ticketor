@@ -92,7 +92,7 @@
 
   const ctx = elements.pdfCanvas.getContext('2d');
   if (window.pdfjsLib) {
-    window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdf.worker.min.js';
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('./pdf.worker.min.js?v=20260304', window.location.href).toString();
   }
 
   function setStatus(message, isError) {
@@ -1884,7 +1884,21 @@
       setStatus(`Loading PDF: ${file.name}${getQueueProgressLabel()}...`, false);
       clearTicketWorkspaceForNextDrawing();
       const buffer = await file.arrayBuffer();
-      state.pdfDoc = await window.pdfjsLib.getDocument({ data: buffer }).promise;
+      let loadingTask = window.pdfjsLib.getDocument({ data: buffer });
+      try {
+        state.pdfDoc = await loadingTask.promise;
+      } catch (workerError) {
+        const message = String(workerError?.message || workerError || '');
+        const isWorkerSetupIssue = /worker|fake worker|cannot load script/i.test(message);
+        if (!isWorkerSetupIssue) {
+          throw workerError;
+        }
+
+        console.warn('PDF worker setup failed, retrying with worker disabled.', workerError);
+        loadingTask = window.pdfjsLib.getDocument({ data: buffer, disableWorker: true });
+        state.pdfDoc = await loadingTask.promise;
+      }
+
       state.page = await state.pdfDoc.getPage(1);
       state.activePdfFileName = file.name || '';
       state.scale = 1.6;
