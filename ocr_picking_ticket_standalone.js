@@ -52,6 +52,7 @@
     drawingNumber: document.getElementById('drawingNumber'),
     operatingTemperature: document.getElementById('operatingTemperature'),
     insulationType: document.getElementById('insulationType'),
+    materialType: document.getElementById('materialType'),
     sheetNo: document.getElementById('sheetNo'),
     revision: document.getElementById('revision'),
     ocrLanguage: document.getElementById('ocrLanguage'),
@@ -662,25 +663,27 @@
   }
 
   function getDrawingNumber() {
-    return (elements.drawingNumber?.value || '').trim();
+    return String(elements.drawingNumber?.value || '').trim().toUpperCase();
   }
 
   function createTypeCellHtml(nameBase, selected) {
     const types = [
-      { value: 'P', label: 'P - Piping' },
-      { value: 'WF', label: 'WF - Workshop Fabrication' },
-      { value: 'SF', label: 'SF - Site Fabrication' },
-      { value: 'E', label: 'E - Erection' },
-      { value: 'S', label: 'S - Supports' },
-      { value: 'EI', label: 'EI - Electrical & Instrumentation' }
+      { value: 'P', initial: 'P' },
+      { value: 'WF', initial: 'WF' },
+      { value: 'SF', initial: 'SF' },
+      { value: 'E', initial: 'E' },
+      { value: 'S', initial: 'S' },
+      { value: 'EI', initial: 'EI' }
     ];
 
-    return types
+    const options = types
       .map((type) => {
         const checked = selected === type.value ? 'checked' : '';
-        return `<label><input type="radio" name="${nameBase}" value="${type.value}" ${checked}> ${type.label}</label>`;
+        return `<label class="typeOption"><span>${type.initial}</span><input type="radio" name="${nameBase}" value="${type.value}" ${checked}></label>`;
       })
       .join('');
+
+    return `<div class="typeOptions">${options}</div>`;
   }
 
   function ensureTypeNames() {
@@ -741,6 +744,7 @@
   function addRow(data) {
     const rowIndex = elements.ocrTableBody.querySelectorAll('tr').length;
     const selectedType = data.type || getRememberedCraftTypeForItemCode(data.itemCode || '') || '';
+    const isManualType = Boolean(data.type);
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td contenteditable="true">${data.pointNumber || ''}</td>
@@ -752,6 +756,7 @@
       <td class="typeCell">${createTypeCellHtml(`type-${rowIndex}`, selectedType)}</td>
     `;
     elements.ocrTableBody.appendChild(tr);
+    tr.dataset.typeManual = isManualType ? 'true' : 'false';
     tr.__ocrOriginal = data._original || null;
     ensureTypeNames();
     elements.generateBtn.disabled = elements.ocrTableBody.querySelectorAll('tr').length === 0;
@@ -791,6 +796,13 @@
     }
 
     setDescriptionNeedsAttention(descriptionCell, currentDescription === PLACEHOLDER_DESCRIPTION_TEXT);
+  }
+
+  function clearRowTypeSelection(row) {
+    if (!row) return;
+    row.querySelectorAll('input[type="radio"]').forEach((radio) => {
+      radio.checked = false;
+    });
   }
 
   function getRowCellValue(row, columnIndex) {
@@ -878,13 +890,19 @@
     return '';
   }
 
-  function applyRememberedCraftTypeToRow(row) {
+  function applyRememberedCraftTypeToRow(row, options) {
+    const settings = options || {};
     if (!row) return false;
-    if (getRowSelectedType(row)) return false;
+    const preserveExisting = settings.preserveExisting !== false;
+    if (preserveExisting && getRowSelectedType(row)) return false;
 
     const cells = row.querySelectorAll('td');
     const itemCode = cells[1]?.textContent.trim() || '';
     if (!itemCode) return false;
+
+    if (!preserveExisting) {
+      clearRowTypeSelection(row);
+    }
 
     const rememberedType = getRememberedCraftTypeForItemCode(itemCode);
     if (!rememberedType) return false;
@@ -892,6 +910,7 @@
     const radio = row.querySelector(`input[type="radio"][value="${rememberedType}"]`);
     if (!radio) return false;
     radio.checked = true;
+    row.dataset.typeManual = 'false';
     return true;
   }
 
@@ -1123,7 +1142,11 @@
     return !normalized || normalized === 'none' || normalized === 'n/a' || normalized === 'na';
   }
 
-  function computePaintSpec(sheetName, temperatureValue, insulationText) {
+  function computePaintSpec(sheetName, temperatureValue, insulationText, materialType) {
+    if (String(materialType || '').trim().toUpperCase() === 'SS') {
+      return '';
+    }
+
     if (sheetName === 'Supports') {
       return 'N/A';
     }
@@ -1206,20 +1229,20 @@
     }
   }
 
-  function reserveTicketNumbers(projectNo, ticketCount) {
+  function buildTicketNumbers(startNumber, ticketCount) {
     const safeCount = Math.max(0, ticketCount || 0);
-    const startNumber = getTicketStartFromInput(projectNo);
-    const finalNumber = safeCount > 0 ? (startNumber + safeCount - 1) : (startNumber - 1);
-
-    if (safeCount > 0) {
-      setStoredLastTicketNumber(projectNo, finalNumber);
-      syncTicketStartField(projectNo);
-    }
-
     return Array.from({ length: safeCount }, (_, index) => formatTicketNumber(startNumber + index));
   }
 
+  function commitTicketNumbers(projectNo, finalNumber) {
+    const parsedFinal = parseInt(String(finalNumber || 0), 10);
+    if (!Number.isFinite(parsedFinal) || parsedFinal < 1) return;
+    setStoredLastTicketNumber(projectNo, parsedFinal);
+    syncTicketStartField(projectNo);
+  }
+
   function buildTicketPayload(rows) {
+    applyHeaderFieldFormatting();
     const learnedCount = learnCorrectionsFromTable();
     rememberCraftMappingsFromTable();
 
@@ -1265,7 +1288,11 @@
     });
 
     const activeSheetNames = SHEET_ORDER.filter((sheetName) => grouped[sheetName].length > 0);
-    const reservedTicketNumbers = reserveTicketNumbers(projectNo, activeSheetNames.length);
+    const ticketStartNumber = getTicketStartFromInput(projectNo);
+    const reservedTicketNumbers = buildTicketNumbers(ticketStartNumber, activeSheetNames.length);
+    const ticketFinalNumber = activeSheetNames.length > 0
+      ? ticketStartNumber + activeSheetNames.length - 1
+      : ticketStartNumber - 1;
 
     const tickets = activeSheetNames.map((sheetName, index) => ({
       sheetName,
@@ -1281,8 +1308,11 @@
       learnedCount,
       operatingTemperature,
       insulationType: normalizeInsulationText(insulationType),
+      materialType: String(elements.materialType?.value || 'CS').trim().toUpperCase() || 'CS',
       sheetNo: elements.sheetNo.value.trim(),
       revision: elements.revision.value.trim(),
+      ticketStartNumber,
+      ticketFinalNumber,
       grouped,
       tickets
     };
@@ -1310,7 +1340,7 @@
     const requestedNo = buildRequestedNumber(payload?.projectNo);
     const ticketNoLabel = isReprint ? `REPRINT: ${ticket.ticketNo}` : `${ticket.ticketNo}`;
     const ticketNoColor = '#b91c1c';
-    const paintSpec = computePaintSpec(ticket?.sheetName, payload?.operatingTemperature, payload?.insulationType);
+    const paintSpec = computePaintSpec(ticket?.sheetName, payload?.operatingTemperature, payload?.insulationType, payload?.materialType);
     const logoSrc = state.logoDataUrl || './Aurex%20Logo.jpg';
     const logoCellHtml = `<span class="logo-frame"><img src="${logoSrc}" alt="Aurex" crossorigin="anonymous" class="aurex-logo" /></span>`;
 
@@ -1367,6 +1397,7 @@
           .ticket-root .left-red { text-align: left; color: #b91c1c; }
           .ticket-root .center-red { color: #b91c1c; }
           .ticket-root .ticket-no { text-align: center; color: ${ticketNoColor}; font-weight: 700; }
+          .ticket-root .date-heading { color: #111827 !important; font-weight: 700 !important; text-align: center !important; }
         </style>
         <div class="sheet-wrap">
           <table class="sheet" aria-label="Picking Ticket">
@@ -1394,7 +1425,7 @@
               <td class="hdr">Requested No.</td>
               <td class="hdr">Paint Spec:</td>
               <td class="hdr">Picking Ticket No.</td>
-              <td colspan="2" class="hdr"></td>
+              <td colspan="2" class="hdr date-heading">Date:</td>
             </tr>
             <tr style="height: 26px;" class="craft-input-row">
               <td colspan="2" class="input-cell">${escapeHtml(ticket.craftLabel)}</td>
@@ -1614,10 +1645,6 @@
       pageCount,
       isReprint: Boolean(settings.isReprint)
     });
-    const dateCell = wrapper.querySelector('.ticket-root .craft-input-row td:last-child');
-    if (dateCell) {
-      dateCell.textContent = '';
-    }
     document.body.appendChild(wrapper);
 
     try {
@@ -1742,6 +1769,10 @@
         triggerDownload(blob, filename);
         await new Promise((resolve) => setTimeout(resolve, 120));
       }
+    }
+
+    if (!settings.isReprint && payload?.tickets?.length > 0) {
+      commitTicketNumbers(payload.projectNo, payload.ticketFinalNumber);
     }
 
     if (outputFolderHandle) {
@@ -1932,6 +1963,39 @@
     await loadPdfFile(file, { fromQueue: false });
   }
 
+  function formatDrawingNumberValue(value) {
+    return String(value || '').toUpperCase();
+  }
+
+  function formatSheetNumberValue(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    if (/^\d+$/.test(raw)) return raw.padStart(3, '0');
+    return raw;
+  }
+
+  function formatRevisionValue(value) {
+    const raw = String(value || '').trim().toUpperCase();
+    if (!raw) return '';
+    const match = raw.match(/^(\d+)([A-Z]*)$/);
+    if (!match) return raw;
+    const numeric = match[1].padStart(2, '0');
+    const suffix = match[2] || '';
+    return `${numeric}${suffix}`;
+  }
+
+  function applyHeaderFieldFormatting() {
+    if (elements.drawingNumber) {
+      elements.drawingNumber.value = formatDrawingNumberValue(elements.drawingNumber.value);
+    }
+    if (elements.sheetNo) {
+      elements.sheetNo.value = formatSheetNumberValue(elements.sheetNo.value);
+    }
+    if (elements.revision) {
+      elements.revision.value = formatRevisionValue(elements.revision.value);
+    }
+  }
+
   function viewerPoint(clientX, clientY) {
     const rect = elements.pdfCanvas.getBoundingClientRect();
     return {
@@ -2051,7 +2115,22 @@
     cropCtx.drawImage(elements.pdfCanvas, x, y, width, height, 0, 0, width, height);
 
     setStatus(`Running OCR for ${COLUMN_LABELS[columnKey]}...`, false);
+    const ocrConfig = {
+      tessedit_pageseg_mode: '6',
+      preserve_interword_spaces: '1'
+    };
+    if (columnKey === 'pointNumber') {
+      ocrConfig.tessedit_char_whitelist = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_/.';
+    } else if (columnKey === 'itemCode') {
+      ocrConfig.tessedit_char_whitelist = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_/.';
+    } else if (columnKey === 'size') {
+      ocrConfig.tessedit_char_whitelist = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789./xX-';
+    } else if (columnKey === 'quantity') {
+      ocrConfig.tessedit_char_whitelist = '0123456789.,';
+    }
+
     const result = await window.Tesseract.recognize(cropCanvas, lang, {
+      ...ocrConfig,
       logger: (m) => {
         if (m.status === 'recognizing text' && typeof m.progress === 'number') {
           setStatus(`OCR ${COLUMN_LABELS[columnKey]}: ${Math.round(m.progress * 100)}%`, false);
@@ -2175,7 +2254,11 @@
     }
   }
 
-  elements.renderBtn.addEventListener('click', renderFirstPage);
+  elements.renderBtn?.addEventListener('click', renderFirstPage);
+  elements.pdfInput?.addEventListener('change', async () => {
+    if (!elements.pdfInput.files || !elements.pdfInput.files[0]) return;
+    await renderFirstPage();
+  });
   elements.loadFolderBtn?.addEventListener('click', () => {
     if (!elements.pdfFolderInput) return;
     elements.pdfFolderInput.value = '';
@@ -2231,7 +2314,10 @@
     const columnIndex = cells.indexOf(cell);
     if (columnIndex === 1) {
       updateMaterialDescriptionForTableRow(row);
-      applyRememberedCraftTypeToRow(row);
+      const isManualType = row.dataset.typeManual === 'true';
+      if (!isManualType) {
+        applyRememberedCraftTypeToRow(row, { preserveExisting: false });
+      }
 
       const selectedType = getRowSelectedType(row);
       if (selectedType) {
@@ -2262,6 +2348,7 @@
     if (itemCode) {
       rememberCraftTypeForItemCode(itemCode, target.value);
     }
+    row.dataset.typeManual = 'true';
 
     row.classList.remove('craft-missing');
 
@@ -2391,6 +2478,16 @@
     syncTicketStartField(projectNo);
   });
 
+  elements.drawingNumber?.addEventListener('input', () => {
+    elements.drawingNumber.value = formatDrawingNumberValue(elements.drawingNumber.value);
+  });
+  elements.sheetNo?.addEventListener('change', () => {
+    elements.sheetNo.value = formatSheetNumberValue(elements.sheetNo.value);
+  });
+  elements.revision?.addEventListener('change', () => {
+    elements.revision.value = formatRevisionValue(elements.revision.value);
+  });
+
   elements.pdfCanvas.addEventListener('mousedown', (event) => {
     if (!state.page) return;
 
@@ -2461,6 +2558,7 @@
   }).catch((error) => {
     console.warn('Catalog initialization failed.', error);
   });
+  applyHeaderFieldFormatting();
   syncTicketStartField(String(elements.projectNo?.value || '').trim() || 'default');
   updateColumnStatus();
 })();
