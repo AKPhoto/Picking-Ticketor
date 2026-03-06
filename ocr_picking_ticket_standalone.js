@@ -32,12 +32,16 @@
     itemCodeDescriptionCatalog: {},
     itemCodeDescriptionCatalogLoaded: false,
     userItemCodeCatalog: {},
-    craftByItemCodeStore: {}
+    craftByItemCodeStore: {},
+    deletedItemCodeSet: {},
+    pendingTicketCommit: null,
+    hasGeneratedCurrentDrawing: false
   };
   const OCR_LEARNING_STORAGE_KEY = 'matcon_ocr_learning_v1';
   const USER_ITEM_CODE_STORAGE_KEY = 'matcon_item_code_user_catalog_v1';
   const BASE_ITEM_CODE_CACHE_STORAGE_KEY = 'matcon_item_code_base_catalog_v1';
   const CRAFT_BY_ITEM_CODE_STORAGE_KEY = 'matcon_craft_by_item_code_v1';
+  const DELETED_ITEM_CODE_STORAGE_KEY = 'matcon_item_code_deleted_catalog_v1';
   const LEARNING_FIELDS = ['pointNumber', 'itemCode', 'size', 'quantity'];
   const PLACEHOLDER_ITEM_CODE = 'PLACEHOLDER-CODE';
   const PLACEHOLDER_DESCRIPTION_TEXT = 'UNRECOGNIZED ITEM CODE - DESCRIPTION REQUIRED';
@@ -78,8 +82,19 @@
     addRowBtn: document.getElementById('addRowBtn'),
     deleteRowBtn: document.getElementById('deleteRowBtn'),
     generateBtn: document.getElementById('generateBtn'),
+    drawingProcessedBtn: document.getElementById('drawingProcessedBtn'),
     exportPdfBtn: document.getElementById('exportPdfBtn'),
     reprintBtn: document.getElementById('reprintBtn'),
+    manageItemCodesBtn: document.getElementById('manageItemCodesBtn'),
+    itemCodeFlyout: document.getElementById('itemCodeFlyout'),
+    itemCodeFlyoutOverlay: document.getElementById('itemCodeFlyoutOverlay'),
+    closeItemCodeFlyoutBtn: document.getElementById('closeItemCodeFlyoutBtn'),
+    itemCodeInput: document.getElementById('itemCodeInput'),
+    itemDescriptionInput: document.getElementById('itemDescriptionInput'),
+    addItemCodeBtn: document.getElementById('addItemCodeBtn'),
+    itemCodeSearchInput: document.getElementById('itemCodeSearchInput'),
+    itemCodeCountLabel: document.getElementById('itemCodeCountLabel'),
+    itemCodeCatalogTableBody: document.getElementById('itemCodeCatalogTableBody'),
     previewCraftSelect: document.getElementById('previewCraftSelect'),
     openPreviewWindowBtn: document.getElementById('openPreviewWindowBtn'),
     ticketPreviewContainer: document.getElementById('ticketPreviewContainer'),
@@ -191,6 +206,40 @@
     return normalized;
   }
 
+  function loadDeletedItemCodeSet() {
+    try {
+      const raw = localStorage.getItem(DELETED_ITEM_CODE_STORAGE_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return {};
+      const normalized = {};
+      Object.entries(parsed).forEach(([key, value]) => {
+        const code = String(key || '').trim().toUpperCase();
+        if (!code || !value) return;
+        normalized[code] = true;
+      });
+      return normalized;
+    } catch (error) {
+      console.warn('Failed to load deleted item codes.', error);
+      return {};
+    }
+  }
+
+  function saveDeletedItemCodeSet() {
+    localStorage.setItem(DELETED_ITEM_CODE_STORAGE_KEY, JSON.stringify(state.deletedItemCodeSet || {}));
+  }
+
+  function applyDeletedCodesFilter(catalog) {
+    const source = normalizeCatalogCodes(catalog);
+    const deletedSet = state.deletedItemCodeSet || {};
+    const filtered = {};
+    Object.entries(source).forEach(([code, description]) => {
+      if (deletedSet[code]) return;
+      filtered[code] = description;
+    });
+    return filtered;
+  }
+
   function loadBaseCatalogFromCache() {
     try {
       const raw = localStorage.getItem(BASE_ITEM_CODE_CACHE_STORAGE_KEY);
@@ -278,10 +327,10 @@
       }
 
       saveBaseCatalogToCache(importedCatalog);
-      state.itemCodeDescriptionCatalog = {
+      state.itemCodeDescriptionCatalog = applyDeletedCodesFilter({
         ...importedCatalog,
         ...normalizeCatalogCodes(state.userItemCodeCatalog || {})
-      };
+      });
       state.itemCodeDescriptionCatalogLoaded = true;
       setStatus(`Catalog imported (${Object.keys(importedCatalog).length} codes).`, false);
       return true;
@@ -298,6 +347,7 @@
     }
 
     try {
+      state.deletedItemCodeSet = loadDeletedItemCodeSet();
       const userCatalog = loadUserItemCodeCatalog();
       state.userItemCodeCatalog = { ...userCatalog };
 
@@ -316,20 +366,22 @@
         }
       }
 
-      state.itemCodeDescriptionCatalog = {
+      state.itemCodeDescriptionCatalog = applyDeletedCodesFilter({
         ...baseCatalog,
         ...normalizeCatalogCodes(userCatalog)
-      };
+      });
       state.itemCodeDescriptionCatalogLoaded = true;
       return state.itemCodeDescriptionCatalog;
     } catch (error) {
       console.warn('Failed to load item code description catalog.', error);
       state.itemCodeDescriptionCatalog = {};
+      state.deletedItemCodeSet = loadDeletedItemCodeSet();
       state.userItemCodeCatalog = loadUserItemCodeCatalog();
       Object.entries(state.userItemCodeCatalog).forEach(([key, value]) => {
         const normalizedKey = String(key || '').trim().toUpperCase();
         const description = String(value || '').trim();
         if (!normalizedKey || !description) return;
+        if (state.deletedItemCodeSet[normalizedKey]) return;
         state.itemCodeDescriptionCatalog[normalizedKey] = description;
       });
       state.itemCodeDescriptionCatalogLoaded = true;
@@ -377,6 +429,10 @@
     if (!cleanCode || !cleanDescription) return;
 
     state.userItemCodeCatalog[cleanCode] = cleanDescription;
+    if (state.deletedItemCodeSet[cleanCode]) {
+      delete state.deletedItemCodeSet[cleanCode];
+      saveDeletedItemCodeSet();
+    }
 
     const candidates = getItemCodeCandidates(cleanCode);
     candidates.forEach((candidate) => {
@@ -384,6 +440,114 @@
     });
 
     saveUserItemCodeCatalog();
+  }
+
+  function deleteCodeFromCatalog(code) {
+    const cleanCode = String(code || '').trim().toUpperCase();
+    if (!cleanCode) return;
+    delete state.userItemCodeCatalog[cleanCode];
+    delete state.itemCodeDescriptionCatalog[cleanCode];
+    state.deletedItemCodeSet[cleanCode] = true;
+    saveUserItemCodeCatalog();
+    saveDeletedItemCodeSet();
+  }
+
+  function getCatalogRowsForFlyout() {
+    const entries = Object.entries(state.itemCodeDescriptionCatalog || {});
+    return entries
+      .map(([code, description]) => ({ code, description }))
+      .sort((a, b) => a.code.localeCompare(b.code, undefined, { sensitivity: 'base', numeric: true }));
+  }
+
+  function renderItemCodeFlyoutRows() {
+    if (!elements.itemCodeCatalogTableBody) return;
+
+    const term = String(elements.itemCodeSearchInput?.value || '').trim().toUpperCase();
+    const allRows = getCatalogRowsForFlyout();
+    const rows = term
+      ? allRows.filter((item) => item.code.includes(term) || String(item.description || '').toUpperCase().includes(term))
+      : allRows;
+
+    elements.itemCodeCatalogTableBody.innerHTML = rows.map((item) => `
+      <tr data-code="${escapeHtml(item.code)}">
+        <td>${escapeHtml(item.code)}</td>
+        <td>${escapeHtml(item.description || '')}</td>
+        <td>
+          <button class="secondary" data-action="edit" data-code="${escapeHtml(item.code)}">Edit</button>
+          <button class="secondary" data-action="delete" data-code="${escapeHtml(item.code)}">Delete</button>
+        </td>
+      </tr>
+    `).join('');
+
+    if (elements.itemCodeCountLabel) {
+      elements.itemCodeCountLabel.textContent = `Codes: ${rows.length}`;
+    }
+  }
+
+  function openItemCodeFlyout() {
+    if (!elements.itemCodeFlyout || !elements.itemCodeFlyoutOverlay) return;
+    renderItemCodeFlyoutRows();
+    elements.itemCodeFlyout.classList.add('open');
+    elements.itemCodeFlyoutOverlay.classList.add('open');
+    elements.itemCodeFlyout.setAttribute('aria-hidden', 'false');
+  }
+
+  function closeItemCodeFlyout() {
+    if (!elements.itemCodeFlyout || !elements.itemCodeFlyoutOverlay) return;
+    elements.itemCodeFlyout.classList.remove('open');
+    elements.itemCodeFlyoutOverlay.classList.remove('open');
+    elements.itemCodeFlyout.setAttribute('aria-hidden', 'true');
+  }
+
+  function upsertItemCodeFromFlyout() {
+    const code = String(elements.itemCodeInput?.value || '').trim().toUpperCase();
+    const description = String(elements.itemDescriptionInput?.value || '').trim();
+    if (!code || !description) {
+      setStatus('Enter both item code and description before adding/updating.', true);
+      return;
+    }
+
+    addCodeToCatalog(code, description);
+    state.itemCodeDescriptionCatalog[code] = description;
+    if (state.deletedItemCodeSet[code]) {
+      delete state.deletedItemCodeSet[code];
+      saveDeletedItemCodeSet();
+    }
+    renderItemCodeFlyoutRows();
+    elements.itemCodeInput.value = '';
+    elements.itemDescriptionInput.value = '';
+    Array.from(elements.ocrTableBody.querySelectorAll('tr')).forEach((row) => updateMaterialDescriptionForTableRow(row));
+    setStatus(`Item code ${code} saved in local catalog.`, false);
+  }
+
+  function handleItemCodeFlyoutTableClick(target) {
+    if (!(target instanceof HTMLElement)) return;
+    const action = target.dataset.action;
+    const code = String(target.dataset.code || '').trim().toUpperCase();
+    if (!action || !code) return;
+
+    if (action === 'edit') {
+      const currentDescription = state.itemCodeDescriptionCatalog[code] || '';
+      if (elements.itemCodeInput) elements.itemCodeInput.value = code;
+      if (elements.itemDescriptionInput) elements.itemDescriptionInput.value = currentDescription;
+      elements.itemDescriptionInput?.focus();
+      return;
+    }
+
+    if (action === 'delete') {
+      const confirmDelete = window.confirm(`Delete item code ${code} from this browser catalog?`);
+      if (!confirmDelete) return;
+      deleteCodeFromCatalog(code);
+      renderItemCodeFlyoutRows();
+      Array.from(elements.ocrTableBody.querySelectorAll('tr')).forEach((row) => updateMaterialDescriptionForTableRow(row));
+      setStatus(`Item code ${code} deleted from local catalog.`, false);
+    }
+  }
+
+  function showDrawingProcessedButton(show) {
+    if (!elements.drawingProcessedBtn) return;
+    elements.drawingProcessedBtn.style.display = show ? 'inline-flex' : 'none';
+    elements.drawingProcessedBtn.disabled = !show;
   }
 
   function promptToAddMissingItemCodes(missingCodes) {
@@ -492,6 +656,58 @@
     size: 'Size',
     quantity: 'Quantity'
   };
+  const SELECTION_COLORS = {
+    ocrArea: '#2563eb',
+    pointNumber: '#16a34a',
+    itemCode: '#ea580c',
+    size: '#7c3aed',
+    quantity: '#dc2626'
+  };
+
+  function normalizePointNumberValue(value) {
+    return String(value || '').replace(/\D+/g, '');
+  }
+
+  function getSelectionForKey(key) {
+    if (key === 'ocrArea') return state.ocrAreaSelection;
+    return state.columnSelections[key] || null;
+  }
+
+  function removeSelectionHighlights() {
+    elements.viewerWrap.querySelectorAll('.selection-highlight').forEach((item) => item.remove());
+  }
+
+  function renderSelectionHighlights() {
+    removeSelectionHighlights();
+    if (!state.viewport) return;
+
+    const keys = ['ocrArea', ...COLUMN_KEYS];
+    keys.forEach((key) => {
+      const selection = getSelectionForKey(key);
+      if (!selection) return;
+
+      const highlight = document.createElement('div');
+      highlight.className = 'selection-highlight';
+      highlight.style.left = `${selection.x}px`;
+      highlight.style.top = `${selection.y}px`;
+      highlight.style.width = `${selection.width}px`;
+      highlight.style.height = `${selection.height}px`;
+      highlight.style.borderColor = SELECTION_COLORS[key] || '#2563eb';
+      highlight.style.backgroundColor = `${(SELECTION_COLORS[key] || '#2563eb')}22`;
+      highlight.title = key === 'ocrArea' ? 'OCR Area' : COLUMN_LABELS[key];
+      elements.viewerWrap.appendChild(highlight);
+    });
+  }
+
+  function scaleSelection(selection, ratio) {
+    if (!selection) return null;
+    return {
+      x: Math.round(selection.x * ratio),
+      y: Math.round(selection.y * ratio),
+      width: Math.round(selection.width * ratio),
+      height: Math.round(selection.height * ratio)
+    };
+  }
 
   function getSelectedColumnsCount() {
     return COLUMN_KEYS.filter((key) => state.columnSelections[key]).length;
@@ -524,7 +740,7 @@
   function updateColumnStatus() {
     const areaSelected = Boolean(state.ocrAreaSelection);
     elements.ocrAreaStatus.textContent = `OCR Area: ${areaSelected ? 'Selected' : 'Not selected'}`;
-    elements.ocrAreaStatus.style.color = areaSelected ? '#166534' : '#334155';
+    elements.ocrAreaStatus.style.color = areaSelected ? SELECTION_COLORS.ocrArea : '#334155';
 
     const map = [
       ['pointNumber', elements.pointColumnStatus, 'Point'],
@@ -536,7 +752,7 @@
     map.forEach(([key, el, label]) => {
       const selected = Boolean(state.columnSelections[key]);
       el.textContent = `${label}: ${selected ? 'Selected' : 'Not selected'}`;
-      el.style.color = selected ? '#166534' : '#334155';
+      el.style.color = selected ? (SELECTION_COLORS[key] || '#166534') : '#334155';
     });
 
     updateRunOcrAvailability();
@@ -593,11 +809,23 @@
 
   async function renderPageAtScale(scale) {
     if (!state.page) return;
+    const previousScale = state.scale || scale;
     state.scale = scale;
     state.viewport = state.page.getViewport({ scale: state.scale });
     elements.pdfCanvas.width = state.viewport.width;
     elements.pdfCanvas.height = state.viewport.height;
     await state.page.render({ canvasContext: ctx, viewport: state.viewport }).promise;
+
+    const ratio = previousScale > 0 ? (state.scale / previousScale) : 1;
+    if (ratio !== 1) {
+      state.ocrAreaSelection = scaleSelection(state.ocrAreaSelection, ratio);
+      COLUMN_KEYS.forEach((key) => {
+        state.columnSelections[key] = scaleSelection(state.columnSelections[key], ratio);
+      });
+      state.selection = scaleSelection(state.selection, ratio);
+    }
+
+    renderSelectionHighlights();
   }
 
   async function resetOcrAreaAndZoom() {
@@ -613,6 +841,7 @@
     setColumnButtonsEnabled(false);
     activateOcrAreaSelectionMode();
     elements.selectionOverlay.style.display = 'none';
+    removeSelectionHighlights();
     elements.viewerWrap.scrollLeft = 0;
     elements.viewerWrap.scrollTop = 0;
     updateColumnStatus();
@@ -637,11 +866,10 @@
       await renderPageAtScale(targetScale);
     }
 
-    const scaleRatio = state.scale / currentScale;
-    const targetX = selection.x * scaleRatio;
-    const targetY = selection.y * scaleRatio;
-    const targetW = selection.width * scaleRatio;
-    const targetH = selection.height * scaleRatio;
+    const targetX = selection.x;
+    const targetY = selection.y;
+    const targetW = selection.width;
+    const targetH = selection.height;
 
     const centerX = targetX + (targetW / 2);
     const centerY = targetY + (targetH / 2);
@@ -737,6 +965,10 @@
     if (elements.reprintBtn) {
       elements.reprintBtn.disabled = true;
     }
+
+    state.pendingTicketCommit = null;
+    state.hasGeneratedCurrentDrawing = false;
+    showDrawingProcessedButton(false);
 
     setStatus('Row deleted.', false);
   }
@@ -1030,7 +1262,7 @@
       const selected = row.querySelector('input[type="radio"]:checked');
       const materialDescription = cells[4]?.textContent.trim() || '';
       return {
-        pointNumber: cells[0]?.textContent.trim() || '',
+        pointNumber: normalizePointNumberValue(cells[0]?.textContent.trim() || ''),
         itemCode: cells[1]?.textContent.trim() || '',
         size: cells[2]?.textContent.trim() || '',
         description: materialDescription,
@@ -1040,6 +1272,34 @@
         type: selected ? selected.value : ''
       };
     }).filter((row) => row.itemCode || row.quantity || row.size || row.pointNumber);
+  }
+
+  function enforceExactCatalogDescriptionsInTable() {
+    const rows = Array.from(elements.ocrTableBody.querySelectorAll('tr'));
+    let correctedCount = 0;
+
+    rows.forEach((row) => {
+      const cells = row.querySelectorAll('td');
+      const itemCode = String(cells[1]?.textContent || '').trim();
+      const descriptionCell = cells[4];
+      if (!itemCode || !descriptionCell) return;
+      if (isPlaceholderItemCode(itemCode)) return;
+
+      const matchedDescription = lookupDescriptionInCatalog(itemCode);
+      if (!matchedDescription) return;
+
+      const currentDescription = String(descriptionCell.textContent || '').trim();
+      if (currentDescription === matchedDescription) {
+        setDescriptionNeedsAttention(descriptionCell, false);
+        return;
+      }
+
+      descriptionCell.textContent = matchedDescription;
+      setDescriptionNeedsAttention(descriptionCell, false);
+      correctedCount += 1;
+    });
+
+    return correctedCount;
   }
 
   function hasMeaningfulRowData(row) {
@@ -1137,14 +1397,29 @@
     return text;
   }
 
+  function normalizeInsulationCode(value) {
+    const text = String(value || '').trim();
+    if (!text) return '';
+    if (isNoInsulation(text)) return '';
+    return text.replace(/\s+/g, '').toUpperCase();
+  }
+
+  function buildDrawingNumberWithInsulation(drawingNumber, insulationType) {
+    const baseDrawing = String(drawingNumber || '').trim().toUpperCase();
+    const insulationText = String(insulationType || '').trim();
+    if (!insulationText || isNoInsulation(insulationText)) return baseDrawing;
+    return `${baseDrawing}-${insulationText}`;
+  }
+
   function isNoInsulation(insulationText) {
     const normalized = String(insulationText || '').trim().toLowerCase();
     return !normalized || normalized === 'none' || normalized === 'n/a' || normalized === 'na';
   }
 
   function computePaintSpec(sheetName, temperatureValue, insulationText, materialType) {
-    if (String(materialType || '').trim().toUpperCase() === 'SS') {
-      return '';
+    const normalizedMaterial = String(materialType || '').trim().toUpperCase();
+    if (normalizedMaterial === 'SS' || normalizedMaterial === 'GS') {
+      return 'N/A';
     }
 
     if (sheetName === 'Supports') {
@@ -1260,6 +1535,8 @@
 
     const operatingTemperature = String(elements.operatingTemperature?.value || '').trim();
     const insulationType = String(elements.insulationType?.value || '').trim();
+      const drawingNumberWithInsulation = buildDrawingNumberWithInsulation(drawingNumber, insulationType);
+
     if (!operatingTemperature) {
       alert('Fill Operating Temperature before generating tickets.');
       return null;
@@ -1303,6 +1580,7 @@
 
     return {
       drawingNumber,
+      drawingNumberWithInsulation,
       projectNo,
       workpackNo,
       learnedCount,
@@ -1338,7 +1616,9 @@
     const pageCount = Math.max(1, parseInt(settings.pageCount || '1', 10) || 1);
     const isReprint = Boolean(settings.isReprint);
     const requestedNo = buildRequestedNumber(payload?.projectNo);
-    const ticketNoLabel = isReprint ? `REPRINT: ${ticket.ticketNo}` : `${ticket.ticketNo}`;
+    const customTicketNumber = String(settings.ticketNumberOverride || '').trim();
+    const ticketNumberText = customTicketNumber || ticket.ticketNo;
+    const ticketNoLabel = isReprint ? `Reprint: ${ticketNumberText}` : `${ticketNumberText}`;
     const ticketNoColor = '#b91c1c';
     const paintSpec = computePaintSpec(ticket?.sheetName, payload?.operatingTemperature, payload?.insulationType, payload?.materialType);
     const logoSrc = state.logoDataUrl || './Aurex%20Logo.jpg';
@@ -1445,7 +1725,7 @@
             <tr style="height: 26px;" class="project-input-row">
               <td colspan="3" class="input-cell">${escapeHtml(payload.projectNo)}</td>
               <td class="input-cell center-red">${escapeHtml(payload.workpackNo)}</td>
-              <td class="input-cell">${escapeHtml(payload.drawingNumber)}</td>
+              <td class="input-cell">${escapeHtml(payload.drawingNumberWithInsulation || payload.drawingNumber)}</td>
               <td class="input-cell">${escapeHtml(payload.sheetNo || '-')}</td>
               <td class="input-cell">${escapeHtml(payload.revision || '-')}</td>
             </tr>
@@ -1576,9 +1856,13 @@
 
   function buildTicketPdfFilename(payload, ticket) {
     const drawingPart = sanitizeFilenamePart(payload?.drawingNumber, 'DRAWING');
+    const insulationPart = sanitizeFilenamePart(normalizeInsulationCode(payload?.insulationType), '');
     const sheetPart = sanitizeFilenamePart(payload?.sheetNo, 'SHEET');
     const revisionPart = normalizeRevisionForFilename(payload?.revision);
     const craftSuffix = getCraftSuffix(ticket?.sheetName);
+    if (insulationPart) {
+      return `${ticket.ticketNo}-${drawingPart}-${insulationPart}-${sheetPart}-R${revisionPart}-${craftSuffix}.pdf`;
+    }
     return `${ticket.ticketNo}-${drawingPart}-${sheetPart}-R${revisionPart}-${craftSuffix}.pdf`;
   }
 
@@ -1643,7 +1927,8 @@
       rows: pageRows,
       pageNumber,
       pageCount,
-      isReprint: Boolean(settings.isReprint)
+      isReprint: Boolean(settings.isReprint),
+      ticketNumberOverride: settings.ticketNumberOverride || ''
     });
     document.body.appendChild(wrapper);
 
@@ -1672,7 +1957,8 @@
     for (let index = 0; index < pages.length; index += 1) {
       const pageRows = pages[index];
       const canvas = await renderTicketPageCanvas(payload, ticket, pageRows, index + 1, pages.length, {
-        isReprint: Boolean(settings.isReprint)
+        isReprint: Boolean(settings.isReprint),
+        ticketNumberOverride: settings.ticketNumberOverride || ''
       });
       const pngBlob = await canvasToBlob(canvas, 'image/png');
       const imageData = await new Promise((resolve, reject) => {
@@ -1745,8 +2031,17 @@
       }
     }
 
-    for (const ticket of payload.tickets) {
-      const blob = await buildPdfBlobFromTicket(payload, ticket, { isReprint: Boolean(settings.isReprint) });
+    for (let ticketIndex = 0; ticketIndex < payload.tickets.length; ticketIndex += 1) {
+      const ticket = payload.tickets[ticketIndex];
+      setStatus(
+        `Exporting ${ticketIndex + 1}/${payload.tickets.length}: ${ticket.craftLabel} (${ticket.ticketNo})...`,
+        false
+      );
+
+      const blob = await buildPdfBlobFromTicket(payload, ticket, {
+        isReprint: Boolean(settings.isReprint),
+        ticketNumberOverride: settings.ticketNumberOverride || ''
+      });
       const filename = buildTicketPdfFilename(payload, ticket);
 
       if (settings.preferDirectoryPicker && typeof window.showSaveFilePicker === 'function') {
@@ -1769,10 +2064,6 @@
         triggerDownload(blob, filename);
         await new Promise((resolve) => setTimeout(resolve, 120));
       }
-    }
-
-    if (!settings.isReprint && payload?.tickets?.length > 0) {
-      commitTicketNumbers(payload.projectNo, payload.ticketFinalNumber);
     }
 
     if (outputFolderHandle) {
@@ -1866,6 +2157,10 @@
     state.lastPreviewPayload = null;
     state.ticketNumbersReserved = false;
     state.currentRenderedTicketCount = 0;
+    state.pendingTicketCommit = null;
+    state.hasGeneratedCurrentDrawing = false;
+    showDrawingProcessedButton(false);
+    removeSelectionHighlights();
   }
 
   async function loadPdfFile(file, options) {
@@ -2057,6 +2352,7 @@
       resetColumnSelections();
       setColumnButtonsEnabled(true);
       updateColumnStatus();
+      renderSelectionHighlights();
       await zoomToSelection(selection);
       activateOcrAreaSelectionMode();
       elements.selectionOverlay.style.display = 'none';
@@ -2067,6 +2363,7 @@
     if (state.activeColumnKey) {
       state.columnSelections[state.activeColumnKey] = selection;
       updateColumnStatus();
+      renderSelectionHighlights();
       setStatus(`${COLUMN_LABELS[state.activeColumnKey]} column captured (${getSelectedColumnsCount()}/4).`, false);
     } else {
       setStatus('Choose a column button first, then drag to capture that column.', true);
@@ -2134,7 +2431,7 @@
       preserve_interword_spaces: '1'
     };
     if (columnKey === 'pointNumber') {
-      ocrConfig.tessedit_char_whitelist = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_/.';
+      ocrConfig.tessedit_char_whitelist = '0123456789';
     } else if (columnKey === 'itemCode') {
       ocrConfig.tessedit_char_whitelist = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_/.';
     } else if (columnKey === 'size') {
@@ -2207,7 +2504,7 @@
       const quantityValues = normalizeColumnValues(rawQuantityValues, expectedCount);
 
       const parsed = Array.from({ length: expectedCount }, (_, index) => ({
-        pointNumber: pointValues[index] || '',
+        pointNumber: normalizePointNumberValue(pointValues[index] || ''),
         itemCode: itemCodeValues[index] || '',
         size: sizeValues[index] || '',
         quantity: quantityValues[index] || '',
@@ -2226,6 +2523,7 @@
         };
         const nextRow = { ...row };
         appliedCorrections += applyLearnedCorrections(nextRow);
+        nextRow.pointNumber = normalizePointNumberValue(nextRow.pointNumber);
         return {
           ...nextRow,
           _original: original
@@ -2241,6 +2539,9 @@
       if (elements.reprintBtn) {
         elements.reprintBtn.disabled = true;
       }
+      state.pendingTicketCommit = null;
+      state.hasGeneratedCurrentDrawing = false;
+      showDrawingProcessedButton(false);
 
       const mismatchMessages = [];
       const foundByColumn = {
@@ -2266,6 +2567,57 @@
       console.error(error);
       setStatus(`OCR failed: ${error.message}`, true);
     }
+  }
+
+  function invalidateGeneratedTicketState() {
+    state.pendingTicketCommit = null;
+    state.hasGeneratedCurrentDrawing = false;
+    showDrawingProcessedButton(false);
+    if (elements.reprintBtn) {
+      elements.reprintBtn.disabled = true;
+    }
+  }
+
+  function fillCellFromAbove(row, columnIndex) {
+    if (!row || columnIndex < 0) return false;
+    const previousRow = row.previousElementSibling;
+    if (!previousRow) return false;
+    const previousCells = previousRow.querySelectorAll('td');
+    const currentCells = row.querySelectorAll('td');
+    const sourceCell = previousCells[columnIndex];
+    const targetCell = currentCells[columnIndex];
+    if (!sourceCell || !targetCell) return false;
+    targetCell.textContent = sourceCell.textContent || '';
+    targetCell.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  }
+
+  async function processDrawingAndMoveNext() {
+    if (!state.pendingTicketCommit) {
+      setStatus('No generated ticket batch is waiting for processing.', true);
+      return;
+    }
+
+    commitTicketNumbers(state.pendingTicketCommit.projectNo, state.pendingTicketCommit.ticketFinalNumber);
+    clearTicketWorkspaceForNextDrawing();
+    elements.viewerWrap.scrollTop = 0;
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+
+    const moved = await loadNextPdfInQueueIfAvailable();
+    if (!moved) {
+      if (state.page) {
+        await resetOcrAreaAndZoom();
+      }
+      setStatus('Drawing processed. Ready to start the next drawing.', false);
+    }
+  }
+
+  function getPromptedReprintTicketNumber() {
+    const entered = window.prompt('Enter the picking ticket number to reprint:', '');
+    if (entered === null) return '';
+    const digits = String(entered).replace(/\D+/g, '');
+    if (!digits) return '';
+    return digits.padStart(6, '0');
   }
 
   elements.renderBtn?.addEventListener('click', renderFirstPage);
@@ -2300,6 +2652,21 @@
   }, { passive: false });
 
   elements.runOcrBtn.addEventListener('click', runOcrOnSelection);
+  elements.manageItemCodesBtn?.addEventListener('click', openItemCodeFlyout);
+  elements.closeItemCodeFlyoutBtn?.addEventListener('click', closeItemCodeFlyout);
+  elements.itemCodeFlyoutOverlay?.addEventListener('click', closeItemCodeFlyout);
+  elements.addItemCodeBtn?.addEventListener('click', upsertItemCodeFromFlyout);
+  elements.itemCodeSearchInput?.addEventListener('input', renderItemCodeFlyoutRows);
+  [elements.itemCodeInput, elements.itemDescriptionInput].forEach((input) => {
+    input?.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      upsertItemCodeFromFlyout();
+    });
+  });
+  elements.itemCodeCatalogTableBody?.addEventListener('click', (event) => {
+    handleItemCodeFlyoutTableClick(event.target);
+  });
   elements.addRowBtn.addEventListener('click', () => {
     const rowsBefore = elements.ocrTableBody.querySelectorAll('tr').length;
     addRow({});
@@ -2307,6 +2674,7 @@
     if (addedRow) {
       setSelectedTableRow(addedRow);
     }
+    invalidateGeneratedTicketState();
   });
   elements.deleteRowBtn?.addEventListener('click', deleteSelectedTableRow);
   elements.ocrTableBody.addEventListener('click', (event) => {
@@ -2315,6 +2683,26 @@
     const row = target.closest('tr');
     if (!row) return;
     setSelectedTableRow(row);
+  });
+  elements.ocrTableBody.addEventListener('keydown', (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement) || target.tagName !== 'TD') return;
+    if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'd') return;
+
+    event.preventDefault();
+    const row = target.closest('tr');
+    if (!row) return;
+    const cells = Array.from(row.querySelectorAll('td'));
+    const columnIndex = cells.indexOf(target);
+    if (columnIndex < 0 || columnIndex > 5) return;
+
+    const filled = fillCellFromAbove(row, columnIndex);
+    if (!filled) {
+      setStatus('Ctrl+D needs a row above to copy from.', true);
+      return;
+    }
+
+    setStatus('Ctrl+D applied: copied value from row above.', false);
   });
   elements.ocrTableBody.addEventListener('input', (event) => {
     const cell = event.target;
@@ -2326,7 +2714,12 @@
 
     const cells = Array.from(row.querySelectorAll('td'));
     const columnIndex = cells.indexOf(cell);
-    if (columnIndex === 1) {
+    if (columnIndex === 0) {
+      const normalized = normalizePointNumberValue(cell.textContent || '');
+      if ((cell.textContent || '') !== normalized) {
+        cell.textContent = normalized;
+      }
+    } else if (columnIndex === 1) {
       updateMaterialDescriptionForTableRow(row);
       const isManualType = row.dataset.typeManual === 'true';
       if (!isManualType) {
@@ -2348,6 +2741,7 @@
     if (elements.reprintBtn) {
       elements.reprintBtn.disabled = true;
     }
+    invalidateGeneratedTicketState();
   });
   elements.ocrTableBody.addEventListener('change', (event) => {
     const target = event.target;
@@ -2372,6 +2766,7 @@
     if (elements.reprintBtn) {
       elements.reprintBtn.disabled = true;
     }
+    invalidateGeneratedTicketState();
   });
   elements.previewCraftSelect.addEventListener('change', () => {
     if (!state.lastPreviewPayload) return;
@@ -2421,6 +2816,12 @@
       }
     }
 
+    const correctedDescriptions = enforceExactCatalogDescriptionsInTable();
+    if (correctedDescriptions > 0) {
+      rowsWithDescriptions = applyMaterialDescriptions(collectRows());
+      setStatus(`Corrected ${correctedDescriptions} material description(s) to exact catalog values.`, false);
+    }
+
     const payload = buildTicketPayload(rowsWithDescriptions);
     if (!payload) return;
 
@@ -2439,7 +2840,16 @@
     try {
       const success = await exportCraftPdfsFromHtml(payload, { isReprint: false, preferDirectoryPicker: true });
       if (success) {
-        await loadNextPdfInQueueIfAvailable();
+        state.pendingTicketCommit = {
+          projectNo: payload.projectNo,
+          ticketFinalNumber: payload.ticketFinalNumber
+        };
+        state.hasGeneratedCurrentDrawing = true;
+        showDrawingProcessedButton(true);
+        if (elements.reprintBtn) {
+          elements.reprintBtn.disabled = false;
+        }
+        setStatus('PDFs generated. Click Drawing Processed to reset this drawing and move to the next one.', false);
       }
     } catch (error) {
       console.error(error);
@@ -2455,7 +2865,15 @@
     try {
       const success = await exportCraftPdfsFromHtml(state.lastPreviewPayload, { isReprint: false, preferDirectoryPicker: true });
       if (success) {
-        await loadNextPdfInQueueIfAvailable();
+        state.pendingTicketCommit = {
+          projectNo: state.lastPreviewPayload.projectNo,
+          ticketFinalNumber: state.lastPreviewPayload.ticketFinalNumber
+        };
+        state.hasGeneratedCurrentDrawing = true;
+        showDrawingProcessedButton(true);
+        if (elements.reprintBtn) {
+          elements.reprintBtn.disabled = false;
+        }
       }
     } catch (error) {
       console.error(error);
@@ -2468,12 +2886,28 @@
       return;
     }
 
+    const reprintTicketNumber = getPromptedReprintTicketNumber();
+    if (!reprintTicketNumber) {
+      setStatus('Reprint canceled: valid picking ticket number not provided.', true);
+      return;
+    }
+
     try {
-      await exportCraftPdfsFromHtml(state.lastPreviewPayload, { isReprint: true, preferDirectoryPicker: true });
+      await exportCraftPdfsFromHtml(state.lastPreviewPayload, {
+        isReprint: true,
+        preferDirectoryPicker: true,
+        ticketNumberOverride: reprintTicketNumber
+      });
     } catch (error) {
       console.error(error);
       setStatus(`Reprint failed: ${error.message}`, true);
     }
+  });
+  elements.drawingProcessedBtn?.addEventListener('click', () => {
+    processDrawingAndMoveNext().catch((error) => {
+      console.error(error);
+      setStatus(`Drawing reset failed: ${error.message}`, true);
+    });
   });
   elements.projectNo.addEventListener('change', () => {
     const projectNo = String(elements.projectNo?.value || '').trim() || 'default';
@@ -2566,6 +3000,7 @@
   }
   loadItemCodeDescriptionCatalog().then((catalog) => {
     const count = Object.keys(catalog || {}).length;
+    renderItemCodeFlyoutRows();
     if (count > 0) {
       setStatus(`Item code catalog loaded (${count} codes). Load a PDF and run OCR.`, false);
     }

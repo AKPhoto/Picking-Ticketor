@@ -21,6 +21,7 @@
     #viewerWrap { position: relative; border: 1px solid #cbd5e1; border-radius: 8px; overflow: auto; max-height: 70vh; background: #fff; }
     #pdfCanvas { display: block; max-width: none; }
     #selectionOverlay { position: absolute; border: 2px dashed #dc2626; background: rgba(220, 38, 38, 0.15); pointer-events: none; display: none; }
+    .selection-highlight { position: absolute; border: 2px solid; background: transparent; pointer-events: none; box-sizing: border-box; }
     .status { font-size: 0.9rem; color: #334155; }
     table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
     th, td { border: 1px solid #e2e8f0; padding: 0.45rem; vertical-align: top; }
@@ -50,6 +51,19 @@
     .excel-ticket .h22 td { height: 22px; }
     .excel-ticket .h18 td { height: 18px; }
     .preview-wrap { overflow-x: auto; }
+    .flyout-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.35); display: none; z-index: 1200; }
+    .flyout-overlay.open { display: block; }
+    .flyout { position: fixed; top: 0; right: 0; width: min(760px, 92vw); height: 100vh; background: #fff; border-left: 1px solid #cbd5e1; box-shadow: -8px 0 20px rgba(2, 6, 23, 0.12); transform: translateX(100%); transition: transform 0.2s ease; z-index: 1300; display: flex; flex-direction: column; }
+    .flyout.open { transform: translateX(0); }
+    .flyout-header { display: flex; justify-content: space-between; align-items: center; padding: 0.9rem 1rem; border-bottom: 1px solid #e2e8f0; }
+    .flyout-title { font-size: 1rem; font-weight: 700; color: #0f172a; }
+    .flyout-body { padding: 0.9rem 1rem; overflow: auto; display: flex; flex-direction: column; gap: 0.8rem; }
+    .flyout-grid { display: grid; grid-template-columns: 180px 1fr auto; gap: 0.5rem; align-items: center; }
+    .flyout-grid input { border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.5rem 0.55rem; font-size: 0.9rem; }
+    .catalog-toolbar { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+    .catalog-toolbar input { border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.45rem 0.55rem; font-size: 0.9rem; min-width: 220px; }
+    .catalog-table-wrap { overflow: auto; border: 1px solid #e2e8f0; border-radius: 6px; }
+    .catalog-table-wrap table td:last-child, .catalog-table-wrap table th:last-child { width: 170px; text-align: center; }
     @media (max-width: 1024px) { .row { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
     @media (max-width: 640px) { .row { grid-template-columns: 1fr; } }
   </style>
@@ -65,7 +79,7 @@
         <div class="field"><label>Workpack</label><input id="workpackNo" placeholder="e.g. WP1"></div>
         <div class="field"><label>Operating Temperature</label><input id="operatingTemperature" type="number" step="1" placeholder="e.g. 40"></div>
         <div class="field"><label>Insulation Type</label><input id="insulationType" placeholder="e.g. None"></div>
-        <div class="field"><label>Material</label><select id="materialType"><option value="CS" selected>Carbon Steel</option><option value="SS">Stainless Steel</option></select></div>
+        <div class="field"><label>Material</label><select id="materialType"><option value="CS" selected>Carbon Steel</option><option value="SS">Stainless Steel</option><option value="GS">Galvanized Steel</option></select></div>
         <div class="field"><label>Drawing Number</label><input id="drawingNumber" placeholder="e.g. SDY-237-XX14AAB-D"></div>
         <div class="field"><label>Sheet No</label><input id="sheetNo" placeholder="e.g. 006"></div>
         <div class="field"><label>Revision</label><input id="revision" placeholder="e.g. 01"></div>
@@ -139,7 +153,9 @@
       </table>
       <div class="actions" style="margin-top:0.8rem;">
         <button id="generateBtn" disabled>Generate Picking Tickets</button>
+        <button id="drawingProcessedBtn" class="secondary" style="display:none;">Drawing Processed</button>
         <button id="reprintBtn" class="secondary" disabled>Reprint Last Tickets</button>
+        <button id="manageItemCodesBtn" class="secondary">Manage Item Codes</button>
       </div>
     </div>
 
@@ -153,6 +169,37 @@
       <div id="ticketPreviewContainer" class="preview-wrap" style="color:#475569;font-size:0.9rem;">Generate picking tickets to load preview.</div>
     </div>
   </div>
+
+  <div id="itemCodeFlyoutOverlay" class="flyout-overlay"></div>
+  <aside id="itemCodeFlyout" class="flyout" aria-hidden="true">
+    <div class="flyout-header">
+      <div class="flyout-title">Item Code Catalog</div>
+      <button id="closeItemCodeFlyoutBtn" class="secondary">Close</button>
+    </div>
+    <div class="flyout-body">
+      <div class="flyout-grid">
+        <input id="itemCodeInput" placeholder="Item code">
+        <input id="itemDescriptionInput" placeholder="Material description">
+        <button id="addItemCodeBtn">Add / Update</button>
+      </div>
+      <div class="catalog-toolbar">
+        <input id="itemCodeSearchInput" placeholder="Search code or description">
+        <span id="itemCodeCountLabel" class="queue-badge">Codes: 0</span>
+      </div>
+      <div class="catalog-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Item Code</th>
+              <th>Description</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="itemCodeCatalogTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </aside>
 
   <script src="pdf.min.js?v=20260304"></script>
   <script src="tesseract.min.js?v=20260304"></script>
