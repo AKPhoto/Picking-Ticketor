@@ -35,7 +35,8 @@
     craftByItemCodeStore: {},
     deletedItemCodeSet: {},
     pendingTicketCommit: null,
-    hasGeneratedCurrentDrawing: false
+    hasGeneratedCurrentDrawing: false,
+    isProcessingDrawing: false
   };
   const OCR_LEARNING_STORAGE_KEY = 'matcon_ocr_learning_v1';
   const USER_ITEM_CODE_STORAGE_KEY = 'matcon_item_code_user_catalog_v1';
@@ -2612,16 +2613,29 @@
       return;
     }
 
-    commitTicketNumbers(state.pendingTicketCommit.projectNo, state.pendingTicketCommit.ticketFinalNumber);
-    clearTicketWorkspaceForNextDrawing();
-    window.scrollTo(0, 0);
+    if (state.isProcessingDrawing) {
+      return;
+    }
 
-    const moved = await loadNextPdfInQueueIfAvailable();
-    if (!moved) {
-      if (state.page) {
-        await resetOcrAreaAndZoom();
+    state.isProcessingDrawing = true;
+    if (elements.drawingProcessedBtn) {
+      elements.drawingProcessedBtn.disabled = true;
+    }
+
+    try {
+      commitTicketNumbers(state.pendingTicketCommit.projectNo, state.pendingTicketCommit.ticketFinalNumber);
+      clearTicketWorkspaceForNextDrawing();
+      window.scrollTo(0, 0);
+
+      const moved = await loadNextPdfInQueueIfAvailable();
+      if (!moved) {
+        if (state.page) {
+          await resetOcrAreaAndZoom();
+        }
+        setStatus('Drawing processed. Ready to start the next drawing.', false);
       }
-      setStatus('Drawing processed. Ready to start the next drawing.', false);
+    } finally {
+      state.isProcessingDrawing = false;
     }
   }
 
