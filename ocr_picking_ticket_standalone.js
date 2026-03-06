@@ -842,10 +842,14 @@
     activateOcrAreaSelectionMode();
     elements.selectionOverlay.style.display = 'none';
     removeSelectionHighlights();
-    elements.viewerWrap.scrollLeft = 0;
-    elements.viewerWrap.scrollTop = 0;
+    resetViewerViewportPosition();
     updateColumnStatus();
     setStatus('Reset complete. Select OCR Area again and drag the correct region.', false);
+  }
+
+  function resetViewerViewportPosition() {
+    elements.viewerWrap.scrollLeft = 0;
+    elements.viewerWrap.scrollTop = 0;
   }
 
   async function zoomToSelection(selection) {
@@ -866,10 +870,11 @@
       await renderPageAtScale(targetScale);
     }
 
-    const targetX = selection.x;
-    const targetY = selection.y;
-    const targetW = selection.width;
-    const targetH = selection.height;
+    const centeredSelection = state.ocrAreaSelection || selection;
+    const targetX = centeredSelection.x;
+    const targetY = centeredSelection.y;
+    const targetW = centeredSelection.width;
+    const targetH = centeredSelection.height;
 
     const centerX = targetX + (targetW / 2);
     const centerY = targetY + (targetH / 2);
@@ -2202,6 +2207,7 @@
       state.ocrAreaSelection = null;
       resetColumnSelections();
       elements.selectionOverlay.style.display = 'none';
+      resetViewerViewportPosition();
       setColumnButtonsEnabled(false);
       activateOcrAreaSelectionMode();
       updateColumnStatus();
@@ -2600,8 +2606,8 @@
 
     commitTicketNumbers(state.pendingTicketCommit.projectNo, state.pendingTicketCommit.ticketFinalNumber);
     clearTicketWorkspaceForNextDrawing();
-    elements.viewerWrap.scrollTop = 0;
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    resetViewerViewportPosition();
+    window.scrollTo(0, 0);
 
     const moved = await loadNextPdfInQueueIfAvailable();
     if (!moved) {
