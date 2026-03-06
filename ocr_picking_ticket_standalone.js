@@ -2151,6 +2151,14 @@
   function clearTicketWorkspaceForNextDrawing() {
     elements.ocrTableBody.innerHTML = '';
     setSelectedTableRow(null);
+    state.selection = null;
+    state.ocrAreaSelection = null;
+    resetColumnSelections();
+    elements.selectionOverlay.style.display = 'none';
+    setColumnButtonsEnabled(false);
+    activateOcrAreaSelectionMode();
+    updateColumnStatus();
+    resetViewerViewportPosition();
     clearCraftMissingHighlights();
     elements.generateBtn.disabled = true;
     if (elements.exportPdfBtn) elements.exportPdfBtn.disabled = true;
@@ -2606,7 +2614,6 @@
 
     commitTicketNumbers(state.pendingTicketCommit.projectNo, state.pendingTicketCommit.ticketFinalNumber);
     clearTicketWorkspaceForNextDrawing();
-    resetViewerViewportPosition();
     window.scrollTo(0, 0);
 
     const moved = await loadNextPdfInQueueIfAvailable();
