@@ -36,7 +36,8 @@
     deletedItemCodeSet: {},
     pendingTicketCommit: null,
     hasGeneratedCurrentDrawing: false,
-    isProcessingDrawing: false
+    isProcessingDrawing: false,
+    materialTypeManuallyChanged: false
   };
   const OCR_LEARNING_STORAGE_KEY = 'matcon_ocr_learning_v1';
   const USER_ITEM_CODE_STORAGE_KEY = 'matcon_item_code_user_catalog_v1';
@@ -66,6 +67,7 @@
     renderBtn: document.getElementById('renderBtn'),
     loadFolderBtn: document.getElementById('loadFolderBtn'),
     queueStatusBadge: document.getElementById('queueStatusBadge'),
+    expectedItemCountField: document.getElementById('expectedItemCountField'),
     runOcrBtn: document.getElementById('runOcrBtn'),
     itemCount: document.getElementById('itemCount'),
     lockCanvasScroll: document.getElementById('lockCanvasScroll'),
@@ -99,6 +101,7 @@
     previewCraftSelect: document.getElementById('previewCraftSelect'),
     openPreviewWindowBtn: document.getElementById('openPreviewWindowBtn'),
     ticketPreviewContainer: document.getElementById('ticketPreviewContainer'),
+    editableResultsCard: document.getElementById('editableResultsCard'),
     status: document.getElementById('status'),
     viewerWrap: document.getElementById('viewerWrap'),
     pdfCanvas: document.getElementById('pdfCanvas'),
@@ -547,8 +550,8 @@
 
   function showDrawingProcessedButton(show) {
     if (!elements.drawingProcessedBtn) return;
-    elements.drawingProcessedBtn.style.display = show ? 'inline-flex' : 'none';
-    elements.drawingProcessedBtn.disabled = !show;
+    elements.drawingProcessedBtn.style.display = 'none';
+    elements.drawingProcessedBtn.disabled = true;
   }
 
   function promptToAddMissingItemCodes(missingCodes) {
@@ -651,6 +654,10 @@
   }
 
   const COLUMN_KEYS = ['pointNumber', 'itemCode', 'size', 'quantity'];
+  const KNOWN_ITEM_CODE_CORRECTIONS = {
+    '1001724': '0672123',
+    '0599620': '0554627'
+  };
   const COLUMN_LABELS = {
     pointNumber: 'Point Number',
     itemCode: 'Item Code',
@@ -768,6 +775,12 @@
     state.selectionMode = 'column';
     state.activeColumnKey = columnKey;
 
+    if (state.columnSelections[columnKey]) {
+      state.columnSelections[columnKey] = null;
+      renderSelectionHighlights();
+      updateColumnStatus();
+    }
+
     const buttonMap = {
       ocrArea: elements.selectOcrAreaBtn,
       pointNumber: elements.selectPointColumnBtn,
@@ -787,6 +800,10 @@
   }
 
   function activateOcrAreaSelectionMode() {
+    if (elements.selectOcrAreaBtn?.disabled) {
+      return;
+    }
+
     state.selectionMode = 'ocrArea';
     state.activeColumnKey = null;
 
@@ -839,6 +856,7 @@
     state.selection = null;
     state.ocrAreaSelection = null;
     resetColumnSelections();
+    setOcrAreaButtonLocked(false);
     setColumnButtonsEnabled(false);
     activateOcrAreaSelectionMode();
     elements.selectionOverlay.style.display = 'none';
@@ -846,6 +864,41 @@
     resetViewerViewportPosition();
     updateColumnStatus();
     setStatus('Reset complete. Select OCR Area again and drag the correct region.', false);
+  }
+
+  function setOcrAreaButtonLocked(locked) {
+    if (!elements.selectOcrAreaBtn) return;
+    elements.selectOcrAreaBtn.disabled = Boolean(locked);
+  }
+
+  function applyKnownItemCodeCorrections(value) {
+    const normalized = String(value || '').trim().toUpperCase();
+    if (!normalized) return normalized;
+    return KNOWN_ITEM_CODE_CORRECTIONS[normalized] || normalized;
+  }
+
+  function detectMaterialTypeFromDescriptionText(value) {
+    const text = String(value || '').trim().toLowerCase();
+    if (!text || text.includes('gasket')) return '';
+    if (/(316|\bss\b|stainless\s*steel)/i.test(text)) return 'SS';
+    if (/(galv|galvanized)/i.test(text)) return 'GS';
+    return '';
+  }
+
+  function autoSetMaterialTypeFromTableIfAllowed() {
+    if (state.materialTypeManuallyChanged || !elements.materialType) return;
+
+    const rows = Array.from(elements.ocrTableBody.querySelectorAll('tr'));
+    for (const row of rows) {
+      const description = row.querySelectorAll('td')[4]?.textContent || '';
+      const detected = detectMaterialTypeFromDescriptionText(description);
+      if (!detected) continue;
+      if (elements.materialType.value !== detected) {
+        elements.materialType.value = detected;
+        setStatus(`Material auto-set to ${detected === 'SS' ? 'Stainless Steel' : 'Galvanized Steel'} based on OCR description.`, false);
+      }
+      return;
+    }
   }
 
   function resetViewerViewportPosition() {
@@ -968,9 +1021,6 @@
     if (elements.exportPdfBtn) {
       elements.exportPdfBtn.disabled = true;
     }
-    if (elements.reprintBtn) {
-      elements.reprintBtn.disabled = true;
-    }
 
     state.pendingTicketCommit = null;
     state.hasGeneratedCurrentDrawing = false;
@@ -979,14 +1029,47 @@
     setStatus('Row deleted.', false);
   }
 
+  function stripItemCodeAppendText(value) {
+    return String(value || '').replace(/\s*\(OCR:\s*[^)]*\)\s*$/i, '').trim();
+  }
+
+  function buildItemCodeCellHtml(itemCode, recognizedCode) {
+    const mainCode = String(itemCode || '').trim();
+    const rawCode = String(recognizedCode || '').trim();
+    if (!rawCode || !mainCode || rawCode === mainCode) {
+      return mainCode;
+    }
+    return `<span class="item-code-main">${escapeHtml(mainCode)}</span> <span class="item-code-ocr-append">(OCR: ${escapeHtml(rawCode)})</span>`;
+  }
+
+  function getNormalizedItemCodeFromCell(cell) {
+    if (!cell) return '';
+    const mainCodeNode = cell.querySelector('.item-code-main');
+    if (mainCodeNode) return String(mainCodeNode.textContent || '').trim();
+    return stripItemCodeAppendText(cell.textContent || '');
+  }
+
+  function clearItemCodeAppendMarkup(cell) {
+    if (!cell) return;
+    const normalized = getNormalizedItemCodeFromCell(cell);
+    cell.textContent = normalized;
+  }
+
+  function finalizeItemCodeAppendHints() {
+    elements.ocrTableBody.querySelectorAll('.item-code-ocr-append').forEach((el) => {
+      el.classList.add('finalized');
+    });
+  }
+
   function addRow(data) {
     const rowIndex = elements.ocrTableBody.querySelectorAll('tr').length;
     const selectedType = data.type || getRememberedCraftTypeForItemCode(data.itemCode || '') || '';
     const isManualType = Boolean(data.type);
     const tr = document.createElement('tr');
+    const itemCodeCellHtml = buildItemCodeCellHtml(data.itemCode || '', data._ocrRecognizedItemCode || '');
     tr.innerHTML = `
       <td contenteditable="true">${data.pointNumber || ''}</td>
-      <td contenteditable="true">${data.itemCode || ''}</td>
+      <td contenteditable="true">${itemCodeCellHtml}</td>
       <td contenteditable="true">${data.size || ''}</td>
       <td contenteditable="true">${data.quantity || ''}</td>
       <td contenteditable="true">${data.materialDescription || data.description || ''}</td>
@@ -1010,7 +1093,7 @@
 
   function updateMaterialDescriptionForTableRow(row) {
     const cells = row.querySelectorAll('td');
-    const itemCode = cells[1]?.textContent.trim() || '';
+    const itemCode = getNormalizedItemCodeFromCell(cells[1]);
     const descriptionCell = cells[4];
     if (!descriptionCell) return;
 
@@ -1018,22 +1101,26 @@
     if (matchedDescription) {
       descriptionCell.textContent = matchedDescription;
       setDescriptionNeedsAttention(descriptionCell, false);
+      autoSetMaterialTypeFromTableIfAllowed();
       return;
     }
 
     const currentDescription = String(descriptionCell.textContent || '').trim();
     if (!itemCode) {
       setDescriptionNeedsAttention(descriptionCell, false);
+      autoSetMaterialTypeFromTableIfAllowed();
       return;
     }
 
     if (!currentDescription) {
       descriptionCell.textContent = PLACEHOLDER_DESCRIPTION_TEXT;
       setDescriptionNeedsAttention(descriptionCell, true);
+      autoSetMaterialTypeFromTableIfAllowed();
       return;
     }
 
     setDescriptionNeedsAttention(descriptionCell, currentDescription === PLACEHOLDER_DESCRIPTION_TEXT);
+    autoSetMaterialTypeFromTableIfAllowed();
   }
 
   function clearRowTypeSelection(row) {
@@ -1045,6 +1132,9 @@
 
   function getRowCellValue(row, columnIndex) {
     const cells = row.querySelectorAll('td');
+    if (columnIndex === 1) {
+      return getNormalizedItemCodeFromCell(cells[columnIndex]);
+    }
     return cells[columnIndex]?.textContent.trim() || '';
   }
 
@@ -1135,7 +1225,7 @@
     if (preserveExisting && getRowSelectedType(row)) return false;
 
     const cells = row.querySelectorAll('td');
-    const itemCode = cells[1]?.textContent.trim() || '';
+    const itemCode = getNormalizedItemCodeFromCell(cells[1]);
     if (!itemCode) return false;
 
     if (!preserveExisting) {
@@ -1157,7 +1247,7 @@
     const rows = Array.from(elements.ocrTableBody.querySelectorAll('tr'));
     rows.forEach((row) => {
       const cells = row.querySelectorAll('td');
-      const itemCode = cells[1]?.textContent.trim() || '';
+      const itemCode = getNormalizedItemCodeFromCell(cells[1]);
       const selectedType = getRowSelectedType(row);
       if (!selectedType || !itemCode) return;
       if (rememberCraftTypeForItemCode(itemCode, selectedType)) {
@@ -1177,7 +1267,7 @@
       const itemCodeCell = cells[1];
       if (!itemCodeCell) return;
 
-      const currentValue = itemCodeCell.textContent.trim();
+      const currentValue = getNormalizedItemCodeFromCell(itemCodeCell);
       if (!isInvalidItemCode(currentValue)) return;
 
       promptedCount += 1;
@@ -1269,7 +1359,7 @@
       const materialDescription = cells[4]?.textContent.trim() || '';
       return {
         pointNumber: normalizePointNumberValue(cells[0]?.textContent.trim() || ''),
-        itemCode: cells[1]?.textContent.trim() || '',
+        itemCode: getNormalizedItemCodeFromCell(cells[1]),
         size: cells[2]?.textContent.trim() || '',
         description: materialDescription,
         materialDescription,
@@ -1311,7 +1401,7 @@
   function hasMeaningfulRowData(row) {
     const cells = row.querySelectorAll('td');
     const pointNumber = cells[0]?.textContent.trim() || '';
-    const itemCode = cells[1]?.textContent.trim() || '';
+    const itemCode = getNormalizedItemCodeFromCell(cells[1]);
     const size = cells[2]?.textContent.trim() || '';
     const quantity = cells[3]?.textContent.trim() || '';
     return Boolean(pointNumber || itemCode || size || quantity);
@@ -2156,6 +2246,7 @@
     state.ocrAreaSelection = null;
     resetColumnSelections();
     elements.selectionOverlay.style.display = 'none';
+    setOcrAreaButtonLocked(false);
     setColumnButtonsEnabled(false);
     activateOcrAreaSelectionMode();
     updateColumnStatus();
@@ -2163,7 +2254,6 @@
     clearCraftMissingHighlights();
     elements.generateBtn.disabled = true;
     if (elements.exportPdfBtn) elements.exportPdfBtn.disabled = true;
-    if (elements.reprintBtn) elements.reprintBtn.disabled = true;
     elements.previewCraftSelect.innerHTML = '';
     elements.previewCraftSelect.disabled = true;
     elements.openPreviewWindowBtn.disabled = true;
@@ -2173,6 +2263,7 @@
     state.currentRenderedTicketCount = 0;
     state.pendingTicketCommit = null;
     state.hasGeneratedCurrentDrawing = false;
+    state.materialTypeManuallyChanged = false;
     showDrawingProcessedButton(false);
     removeSelectionHighlights();
   }
@@ -2220,6 +2311,7 @@
       setColumnButtonsEnabled(false);
       activateOcrAreaSelectionMode();
       updateColumnStatus();
+      elements.expectedItemCountField?.scrollIntoView({ block: 'start', behavior: 'auto' });
 
       if (settings.fromQueue) {
         setStatus(`Loaded ${file.name}${getQueueProgressLabel()}. Select OCR area/columns, run OCR, generate, then export to continue queue.`, false);
@@ -2366,6 +2458,7 @@
       state.ocrAreaSelection = selection;
       resetColumnSelections();
       setColumnButtonsEnabled(true);
+      setOcrAreaButtonLocked(true);
       updateColumnStatus();
       renderSelectionHighlights();
       await zoomToSelection(selection);
@@ -2448,7 +2541,8 @@
     if (columnKey === 'pointNumber') {
       ocrConfig.tessedit_char_whitelist = '0123456789';
     } else if (columnKey === 'itemCode') {
-      ocrConfig.tessedit_char_whitelist = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_/.';
+      ocrConfig.tessedit_char_whitelist = '0123456789';
+      ocrConfig.classify_bln_numeric_mode = '1';
     } else if (columnKey === 'size') {
       ocrConfig.tessedit_char_whitelist = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789./xX-';
     } else if (columnKey === 'quantity') {
@@ -2525,23 +2619,32 @@
         quantity: quantityValues[index] || '',
         materialDescription: '',
         projectNo: elements.projectNo.value.trim(),
-        type: ''
+        type: '',
+        _ocrRawItemCode: itemCodeValues[index] || ''
       }));
 
       let appliedCorrections = 0;
       const corrected = parsed.map((row) => {
+        const rawItemCode = String(row._ocrRawItemCode || row.itemCode || '').trim();
         const original = {
           pointNumber: row.pointNumber,
-          itemCode: row.itemCode,
+          itemCode: rawItemCode,
           size: row.size,
           quantity: row.quantity
         };
-        const nextRow = { ...row };
+        const nextRow = {
+          ...row,
+          itemCode: applyKnownItemCodeCorrections(row.itemCode)
+        };
         appliedCorrections += applyLearnedCorrections(nextRow);
         nextRow.pointNumber = normalizePointNumberValue(nextRow.pointNumber);
+        const recognizedItemCode = String(original.itemCode || '').trim();
+        const correctedItemCode = String(nextRow.itemCode || '').trim();
+        const correctedFromRaw = Boolean(recognizedItemCode && correctedItemCode && correctedItemCode !== recognizedItemCode);
         return {
           ...nextRow,
-          _original: original
+          _original: original,
+          _ocrRecognizedItemCode: correctedFromRaw ? recognizedItemCode : ''
         };
       });
 
@@ -2551,12 +2654,11 @@
       setSelectedTableRow(null);
       correctedWithDescriptions.forEach((row) => addRow(row));
       elements.generateBtn.disabled = false;
-      if (elements.reprintBtn) {
-        elements.reprintBtn.disabled = true;
-      }
       state.pendingTicketCommit = null;
       state.hasGeneratedCurrentDrawing = false;
       showDrawingProcessedButton(false);
+      autoSetMaterialTypeFromTableIfAllowed();
+      elements.editableResultsCard?.scrollIntoView({ block: 'start', behavior: 'auto' });
 
       const mismatchMessages = [];
       const foundByColumn = {
@@ -2588,9 +2690,6 @@
     state.pendingTicketCommit = null;
     state.hasGeneratedCurrentDrawing = false;
     showDrawingProcessedButton(false);
-    if (elements.reprintBtn) {
-      elements.reprintBtn.disabled = true;
-    }
   }
 
   function fillCellFromAbove(row, columnIndex) {
@@ -2607,6 +2706,54 @@
     return true;
   }
 
+  function focusEditableCellByPosition(rowIndex, columnIndex) {
+    const rows = Array.from(elements.ocrTableBody.querySelectorAll('tr'));
+    const targetRow = rows[rowIndex];
+    if (!targetRow) return false;
+    const cells = targetRow.querySelectorAll('td');
+    const targetCell = cells[columnIndex];
+    if (!targetCell || targetCell.getAttribute('contenteditable') !== 'true') return false;
+    targetCell.focus();
+    setSelectedTableRow(targetRow);
+    return true;
+  }
+
+  function moveFocusByEnter(row, columnIndex) {
+    const rows = Array.from(elements.ocrTableBody.querySelectorAll('tr'));
+    const rowIndex = rows.indexOf(row);
+    if (rowIndex < 0 || columnIndex < 0 || columnIndex > 5) return false;
+
+    const nextRowIndex = rowIndex + 1;
+    if (nextRowIndex < rows.length) {
+      return focusEditableCellByPosition(nextRowIndex, columnIndex);
+    }
+
+    const nextColumnIndex = columnIndex + 1;
+    if (nextColumnIndex <= 5) {
+      return focusEditableCellByPosition(0, nextColumnIndex);
+    }
+
+    return false;
+  }
+
+  function moveFocusByCtrlEnter(row, columnIndex) {
+    const rows = Array.from(elements.ocrTableBody.querySelectorAll('tr'));
+    const rowIndex = rows.indexOf(row);
+    if (rowIndex < 0 || columnIndex < 0 || columnIndex > 5) return false;
+
+    const nextColumnIndex = columnIndex + 1;
+    if (nextColumnIndex <= 5) {
+      return focusEditableCellByPosition(rowIndex, nextColumnIndex);
+    }
+
+    const nextRowIndex = rowIndex + 1;
+    if (nextRowIndex < rows.length) {
+      return focusEditableCellByPosition(nextRowIndex, 0);
+    }
+
+    return false;
+  }
+
   async function processDrawingAndMoveNext() {
     if (!state.pendingTicketCommit) {
       setStatus('No generated ticket batch is waiting for processing.', true);
@@ -2618,9 +2765,6 @@
     }
 
     state.isProcessingDrawing = true;
-    if (elements.drawingProcessedBtn) {
-      elements.drawingProcessedBtn.disabled = true;
-    }
 
     try {
       commitTicketNumbers(state.pendingTicketCommit.projectNo, state.pendingTicketCommit.ticketFinalNumber);
@@ -2648,6 +2792,11 @@
   }
 
   elements.renderBtn?.addEventListener('click', renderFirstPage);
+  elements.pdfInput?.addEventListener('click', () => {
+    const drawing = getDrawingNumber();
+    if (!drawing) return;
+    setStatus(`Select the PDF for drawing ${drawing}.`, false);
+  });
   elements.pdfInput?.addEventListener('change', async () => {
     if (!elements.pdfInput.files || !elements.pdfInput.files[0]) return;
     await renderFirstPage();
@@ -2661,7 +2810,11 @@
     const files = elements.pdfFolderInput.files;
     await startPdfQueueFromFolder(files);
   });
-  elements.selectOcrAreaBtn.addEventListener('click', activateOcrAreaSelectionMode);
+  elements.selectOcrAreaBtn.addEventListener('click', () => {
+    if (elements.selectOcrAreaBtn?.disabled) return;
+    activateOcrAreaSelectionMode();
+    setOcrAreaButtonLocked(true);
+  });
   elements.resetOcrAreaBtn.addEventListener('click', () => {
     resetOcrAreaAndZoom().catch((error) => {
       console.error(error);
@@ -2714,6 +2867,23 @@
   elements.ocrTableBody.addEventListener('keydown', (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement) || target.tagName !== 'TD') return;
+
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      const row = target.closest('tr');
+      if (!row) return;
+      const cells = Array.from(row.querySelectorAll('td'));
+      const columnIndex = cells.indexOf(target);
+      if (columnIndex < 0 || columnIndex > 5) return;
+
+      if (event.ctrlKey || event.metaKey) {
+        moveFocusByCtrlEnter(row, columnIndex);
+      } else {
+        moveFocusByEnter(row, columnIndex);
+      }
+      return;
+    }
+
     if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'd') return;
 
     event.preventDefault();
@@ -2747,6 +2917,7 @@
         cell.textContent = normalized;
       }
     } else if (columnIndex === 1) {
+      clearItemCodeAppendMarkup(cell);
       updateMaterialDescriptionForTableRow(row);
       const isManualType = row.dataset.typeManual === 'true';
       if (!isManualType) {
@@ -2755,18 +2926,16 @@
 
       const selectedType = getRowSelectedType(row);
       if (selectedType) {
-        rememberCraftTypeForItemCode(cell.textContent.trim(), selectedType);
+        rememberCraftTypeForItemCode(getNormalizedItemCodeFromCell(cell), selectedType);
       }
     } else if (columnIndex === 4) {
       const cleanDescription = String(cell.textContent || '').trim();
       setDescriptionNeedsAttention(cell, cleanDescription === PLACEHOLDER_DESCRIPTION_TEXT || !cleanDescription);
+      autoSetMaterialTypeFromTableIfAllowed();
     }
 
     if (elements.exportPdfBtn) {
       elements.exportPdfBtn.disabled = true;
-    }
-    if (elements.reprintBtn) {
-      elements.reprintBtn.disabled = true;
     }
     invalidateGeneratedTicketState();
   });
@@ -2779,7 +2948,7 @@
     if (!row) return;
     setSelectedTableRow(row);
 
-    const itemCode = row.querySelectorAll('td')[1]?.textContent.trim() || '';
+    const itemCode = getNormalizedItemCodeFromCell(row.querySelectorAll('td')[1]);
     if (itemCode) {
       rememberCraftTypeForItemCode(itemCode, target.value);
     }
@@ -2790,9 +2959,6 @@
     if (elements.exportPdfBtn) {
       elements.exportPdfBtn.disabled = true;
     }
-    if (elements.reprintBtn) {
-      elements.reprintBtn.disabled = true;
-    }
     invalidateGeneratedTicketState();
   });
   elements.previewCraftSelect.addEventListener('change', () => {
@@ -2801,8 +2967,11 @@
   });
   elements.openPreviewWindowBtn.addEventListener('click', openTicketPreviewWindow);
   elements.generateBtn.addEventListener('click', async () => {
+    elements.generateBtn.disabled = true;
+
     if (!validateCraftSelectionBeforeGeneration()) {
       alert('Each populated row must have a craft selected before generating tickets.');
+      elements.generateBtn.disabled = false;
       return;
     }
 
@@ -2811,14 +2980,18 @@
       alert(`${codePromptResult.placeholderCount} row(s) were assigned ${PLACEHOLDER_ITEM_CODE} placeholders. These placeholders are not learned and must be replaced with valid codes before successful export.`);
     }
 
+    finalizeItemCodeAppendHints();
+
     const rows = collectRows();
     if (rows.length === 0) {
       alert('No rows available to generate tickets.');
+      elements.generateBtn.disabled = false;
       return;
     }
 
     await loadItemCodeDescriptionCatalog();
     if (!await ensureCatalogAvailableForGeneration()) {
+      elements.generateBtn.disabled = false;
       return;
     }
     let rowsWithDescriptions = applyMaterialDescriptions(rows);
@@ -2839,6 +3012,7 @@
           missingCatalogCodes.join(', ')
         );
         setStatus('Generation blocked: unresolved item code(s) in local catalog.', true);
+        elements.generateBtn.disabled = false;
         return;
       }
     }
@@ -2850,7 +3024,10 @@
     }
 
     const payload = buildTicketPayload(rowsWithDescriptions);
-    if (!payload) return;
+    if (!payload) {
+      elements.generateBtn.disabled = false;
+      return;
+    }
 
     renderTicketPreview(payload);
 
@@ -2859,9 +3036,6 @@
 
     if (elements.exportPdfBtn) {
       elements.exportPdfBtn.disabled = payload.tickets.length === 0;
-    }
-    if (elements.reprintBtn) {
-      elements.reprintBtn.disabled = payload.tickets.length === 0;
     }
 
     try {
@@ -2873,14 +3047,15 @@
         };
         state.hasGeneratedCurrentDrawing = true;
         showDrawingProcessedButton(true);
-        if (elements.reprintBtn) {
-          elements.reprintBtn.disabled = false;
-        }
-        setStatus('PDFs generated. Click Drawing Processed to reset this drawing and move to the next one.', false);
+        alert('Drawing processed. Click OK to reset this drawing and move to the next one.');
+        await processDrawingAndMoveNext();
+        return;
       }
+      elements.generateBtn.disabled = false;
     } catch (error) {
       console.error(error);
       setStatus(`Automatic PDF export failed: ${error.message}`, true);
+      elements.generateBtn.disabled = false;
     }
   });
   elements.exportPdfBtn?.addEventListener('click', async () => {
@@ -2898,9 +3073,8 @@
         };
         state.hasGeneratedCurrentDrawing = true;
         showDrawingProcessedButton(true);
-        if (elements.reprintBtn) {
-          elements.reprintBtn.disabled = false;
-        }
+        alert('Drawing processed. Click OK to reset this drawing and move to the next one.');
+        await processDrawingAndMoveNext();
       }
     } catch (error) {
       console.error(error);
@@ -2930,15 +3104,13 @@
       setStatus(`Reprint failed: ${error.message}`, true);
     }
   });
-  elements.drawingProcessedBtn?.addEventListener('click', () => {
-    processDrawingAndMoveNext().catch((error) => {
-      console.error(error);
-      setStatus(`Drawing reset failed: ${error.message}`, true);
-    });
-  });
   elements.projectNo.addEventListener('change', () => {
     const projectNo = String(elements.projectNo?.value || '').trim() || 'default';
     syncTicketStartField(projectNo);
+  });
+
+  elements.materialType?.addEventListener('change', () => {
+    state.materialTypeManuallyChanged = true;
   });
 
   elements.ticketStartNo.addEventListener('change', () => {
@@ -2953,7 +3125,10 @@
     syncTicketStartField(projectNo);
   });
 
-  elements.drawingNumber?.addEventListener('input', () => {
+  elements.drawingNumber?.addEventListener('change', () => {
+    elements.drawingNumber.value = formatDrawingNumberValue(elements.drawingNumber.value);
+  });
+  elements.drawingNumber?.addEventListener('blur', () => {
     elements.drawingNumber.value = formatDrawingNumberValue(elements.drawingNumber.value);
   });
   elements.sheetNo?.addEventListener('change', () => {
@@ -3021,9 +3196,6 @@
   state.craftByItemCodeStore = loadCraftByItemCodeStore();
   if (elements.exportPdfBtn) {
     elements.exportPdfBtn.disabled = true;
-  }
-  if (elements.reprintBtn) {
-    elements.reprintBtn.disabled = true;
   }
   loadItemCodeDescriptionCatalog().then((catalog) => {
     const count = Object.keys(catalog || {}).length;
