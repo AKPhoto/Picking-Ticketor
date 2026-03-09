@@ -1080,6 +1080,29 @@
     cell.textContent = normalized;
   }
 
+  function extractOcrAppendCode(value) {
+    const text = String(value || '').trim();
+    const match = text.match(/^\(OCR:\s*(.*?)\)$/i);
+    if (!match) return '';
+    return String(match[1] || '').trim();
+  }
+
+  function replaceItemCodeWithOcrAppend(appendElement) {
+    if (!(appendElement instanceof HTMLElement)) return false;
+    const itemCodeCell = appendElement.closest('td[contenteditable="true"]');
+    if (!itemCodeCell) return false;
+
+    const ocrCode = extractOcrAppendCode(appendElement.textContent || '');
+    if (!ocrCode) return false;
+
+    itemCodeCell.textContent = ocrCode;
+    itemCodeCell.focus();
+    selectEntireEditableCell(itemCodeCell);
+    itemCodeCell.dispatchEvent(new Event('input', { bubbles: true }));
+    setStatus(`Item code replaced with OCR value: ${ocrCode}.`, false);
+    return true;
+  }
+
   function finalizeItemCodeAppendHints() {
     elements.ocrTableBody.querySelectorAll('.item-code-ocr-append').forEach((el) => {
       el.classList.add('finalized');
@@ -2947,6 +2970,18 @@
   elements.ocrTableBody.addEventListener('click', (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
+
+    const appendElement = target.closest('.item-code-ocr-append');
+    if (appendElement) {
+      event.preventDefault();
+      cancelPendingCellSelection();
+      if (replaceItemCodeWithOcrAppend(appendElement)) {
+        const rowFromAppend = appendElement.closest('tr');
+        if (rowFromAppend) setSelectedTableRow(rowFromAppend);
+        return;
+      }
+    }
+
     const editableCell = target.closest('td[contenteditable="true"]');
     if (editableCell && event.detail === 1) {
       queueSingleClickCellSelection(editableCell);
