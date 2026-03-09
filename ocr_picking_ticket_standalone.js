@@ -24,6 +24,10 @@
     currentRenderedTicketCount: 0,
     lastPreviewPayload: null,
     lastSavePickerHandle: null,
+    outputFolderHandles: {
+      pipeFabrication: null,
+      erectionSupports: null
+    },
     logoDataUrl: '',
     pdfQueueFiles: [],
     pdfQueueIndex: -1,
@@ -47,6 +51,10 @@
   const BASE_ITEM_CODE_CACHE_STORAGE_KEY = 'matcon_item_code_base_catalog_v1';
   const CRAFT_BY_ITEM_CODE_STORAGE_KEY = 'matcon_craft_by_item_code_v1';
   const DELETED_ITEM_CODE_STORAGE_KEY = 'matcon_item_code_deleted_catalog_v1';
+  const SAVE_FOLDER_DB_NAME = 'matcon_folder_handles_v1';
+  const SAVE_FOLDER_STORE_NAME = 'folder_handles';
+  const PIPE_FAB_FOLDER_HANDLE_KEY = 'pipe_fabrication';
+  const ERECTION_SUPPORTS_FOLDER_HANDLE_KEY = 'erection_supports';
   const LEARNING_FIELDS = ['pointNumber', 'itemCode', 'size', 'quantity'];
   const PLACEHOLDER_ITEM_CODE = 'PLACEHOLDER-CODE';
   const PLACEHOLDER_DESCRIPTION_TEXT = 'UNRECOGNIZED ITEM CODE - DESCRIPTION REQUIRED';
@@ -92,6 +100,7 @@
     exportPdfBtn: document.getElementById('exportPdfBtn'),
     reprintBtn: document.getElementById('reprintBtn'),
     manageItemCodesBtn: document.getElementById('manageItemCodesBtn'),
+    changeSaveFoldersBtn: document.getElementById('changeSaveFoldersBtn'),
     itemCodeFlyout: document.getElementById('itemCodeFlyout'),
     itemCodeFlyoutOverlay: document.getElementById('itemCodeFlyoutOverlay'),
     closeItemCodeFlyoutBtn: document.getElementById('closeItemCodeFlyoutBtn'),
@@ -245,6 +254,139 @@
       filtered[code] = description;
     });
     return filtered;
+  }
+
+  function openSaveFolderDb() {
+    return new Promise((resolve, reject) => {
+      if (!window.indexedDB) {
+        reject(new Error('IndexedDB not available.'));
+        return;
+      }
+
+      const request = window.indexedDB.open(SAVE_FOLDER_DB_NAME, 1);
+      request.onerror = () => reject(request.error || new Error('Failed to open folder handle database.'));
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains(SAVE_FOLDER_STORE_NAME)) {
+          db.createObjectStore(SAVE_FOLDER_STORE_NAME);
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+    });
+  }
+
+  async function readSavedFolderHandle(storageKey) {
+    try {
+      const db = await openSaveFolderDb();
+      const handle = await new Promise((resolve, reject) => {
+        const transaction = db.transaction(SAVE_FOLDER_STORE_NAME, 'readonly');
+        const store = transaction.objectStore(SAVE_FOLDER_STORE_NAME);
+        const request = store.get(storageKey);
+        request.onerror = () => reject(request.error || new Error('Failed to read folder handle.'));
+        request.onsuccess = () => resolve(request.result || null);
+      });
+      db.close();
+      return handle;
+    } catch (error) {
+      console.warn('Unable to read saved folder handle.', error);
+      return null;
+    }
+  }
+
+  async function writeSavedFolderHandle(storageKey, handle) {
+    const db = await openSaveFolderDb();
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction(SAVE_FOLDER_STORE_NAME, 'readwrite');
+      const store = transaction.objectStore(SAVE_FOLDER_STORE_NAME);
+      const request = store.put(handle, storageKey);
+      request.onerror = () => reject(request.error || new Error('Failed to save folder handle.'));
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error || new Error('Folder handle transaction failed.'));
+    });
+    db.close();
+  }
+
+  function getFolderGroupKeyForSheet(sheetName) {
+    const normalized = String(sheetName || '').trim().toLowerCase();
+    if (normalized === 'pipe' || normalized === 'fabrication') return 'pipeFabrication';
+    return 'erectionSupports';
+  }
+
+  function getFolderGroupLabel(groupKey) {
+    if (groupKey === 'pipeFabrication') return 'Pipe/Fabrication';
+    return 'Erection/Supports';
+  }
+
+  async function ensureDirectoryHandlePermission(handle) {
+    if (!handle) return false;
+    if (typeof handle.queryPermission !== 'function' || typeof handle.requestPermission !== 'function') {
+      return true;
+    }
+
+    const query = await handle.queryPermission({ mode: 'readwrite' });
+    if (query === 'granted') return true;
+    const requested = await handle.requestPermission({ mode: 'readwrite' });
+    return requested === 'granted';
+  }
+
+  async function loadPersistedOutputFolderHandles() {
+    state.outputFolderHandles.pipeFabrication = await readSavedFolderHandle(PIPE_FAB_FOLDER_HANDLE_KEY);
+    state.outputFolderHandles.erectionSupports = await readSavedFolderHandle(ERECTION_SUPPORTS_FOLDER_HANDLE_KEY);
+  }
+
+  async function saveOutputFolderHandles(pipeFabHandle, erectionSupportsHandle) {
+    await writeSavedFolderHandle(PIPE_FAB_FOLDER_HANDLE_KEY, pipeFabHandle);
+    await writeSavedFolderHandle(ERECTION_SUPPORTS_FOLDER_HANDLE_KEY, erectionSupportsHandle);
+  }
+
+  async function selectOutputFolders(options) {
+    const settings = options || {};
+    if (typeof window.showDirectoryPicker !== 'function') {
+      return false;
+    }
+
+    const force = Boolean(settings.force);
+    if (!force && state.outputFolderHandles.pipeFabrication && state.outputFolderHandles.erectionSupports) {
+      return true;
+    }
+
+    alert('Select output folder for Pipe/Fabrication PDFs.');
+    const pickedPipeFab = await window.showDirectoryPicker({
+      mode: 'readwrite',
+      startIn: state.outputFolderHandles.pipeFabrication || undefined
+    });
+
+    alert('Select output folder for Erection/Supports PDFs.');
+    const pickedErectionSupports = await window.showDirectoryPicker({
+      mode: 'readwrite',
+      startIn: state.outputFolderHandles.erectionSupports || undefined
+    });
+
+    state.outputFolderHandles.pipeFabrication = pickedPipeFab;
+    state.outputFolderHandles.erectionSupports = pickedErectionSupports;
+    await saveOutputFolderHandles(pickedPipeFab, pickedErectionSupports);
+    setStatus('Save folders updated: Pipe/Fabrication and Erection/Supports.', false);
+    return true;
+  }
+
+  async function ensureOutputFoldersReady() {
+    const hasBothFolders = Boolean(state.outputFolderHandles.pipeFabrication && state.outputFolderHandles.erectionSupports);
+    if (!hasBothFolders) {
+      const selected = await selectOutputFolders();
+      if (!selected) return false;
+    }
+
+    const pipeFabAllowed = await ensureDirectoryHandlePermission(state.outputFolderHandles.pipeFabrication);
+    const erectionSupportsAllowed = await ensureDirectoryHandlePermission(state.outputFolderHandles.erectionSupports);
+    if (pipeFabAllowed && erectionSupportsAllowed) return true;
+
+    setStatus('Folder permission is required. Re-select output folders.', true);
+    const reselected = await selectOutputFolders({ force: true });
+    if (!reselected) return false;
+
+    const pipeFabAllowedAfter = await ensureDirectoryHandlePermission(state.outputFolderHandles.pipeFabrication);
+    const erectionSupportsAllowedAfter = await ensureDirectoryHandlePermission(state.outputFolderHandles.erectionSupports);
+    return pipeFabAllowedAfter && erectionSupportsAllowedAfter;
   }
 
   function loadBaseCatalogFromCache() {
@@ -2158,7 +2300,13 @@
     let saveDialogStartHandle = state.lastSavePickerHandle || null;
     if (settings.preferDirectoryPicker) {
       try {
-        if (typeof window.showSaveFilePicker === 'function') {
+        if (typeof window.showDirectoryPicker === 'function') {
+          const ready = await ensureOutputFoldersReady();
+          if (!ready) {
+            setStatus('PDF export canceled while selecting folders.', true);
+            return false;
+          }
+        } else if (typeof window.showSaveFilePicker === 'function') {
           if (!saveDialogStartHandle) {
             saveDialogStartHandle = await pickOutputFolder();
             state.lastSavePickerHandle = saveDialogStartHandle;
@@ -2189,7 +2337,12 @@
       });
       const filename = buildTicketPdfFilename(payload, ticket);
 
-      if (settings.preferDirectoryPicker && typeof window.showSaveFilePicker === 'function') {
+      const folderGroup = getFolderGroupKeyForSheet(ticket.sheetName);
+      const groupedFolderHandle = state.outputFolderHandles[folderGroup] || null;
+
+      if (settings.preferDirectoryPicker && groupedFolderHandle) {
+        await saveBlobToDirectory(groupedFolderHandle, filename, blob);
+      } else if (settings.preferDirectoryPicker && typeof window.showSaveFilePicker === 'function') {
         try {
           const chosenFileHandle = await saveBlobWithSaveDialog(blob, filename, saveDialogStartHandle);
           if (chosenFileHandle) {
@@ -2215,6 +2368,14 @@
       const doneText = settings.isReprint
         ? `Reprint complete: PDFs saved to the Picking Tickets folder. Crafts: ${exportedCraftList}.`
         : `Export complete: PDFs saved to the Picking Tickets folder. Crafts: ${exportedCraftList}.`;
+      setStatus(doneText, false);
+      return true;
+    }
+
+    if (settings.preferDirectoryPicker && state.outputFolderHandles.pipeFabrication && state.outputFolderHandles.erectionSupports) {
+      const doneText = settings.isReprint
+        ? `Reprint complete: Pipe/Fabrication and Erection/Supports PDFs saved to their selected folders. Crafts: ${exportedCraftList}.`
+        : `Export complete: Pipe/Fabrication and Erection/Supports PDFs saved to their selected folders. Crafts: ${exportedCraftList}.`;
       setStatus(doneText, false);
       return true;
     }
@@ -2944,6 +3105,23 @@
 
   elements.runOcrBtn.addEventListener('click', runOcrOnSelection);
   elements.manageItemCodesBtn?.addEventListener('click', openItemCodeFlyout);
+  elements.changeSaveFoldersBtn?.addEventListener('click', async () => {
+    if (typeof window.showDirectoryPicker !== 'function') {
+      setStatus('Folder selection is not supported in this browser.', true);
+      return;
+    }
+
+    try {
+      await selectOutputFolders({ force: true });
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        setStatus('Folder selection canceled.', true);
+        return;
+      }
+      console.error(error);
+      setStatus(`Failed to update save folders: ${error.message}`, true);
+    }
+  });
   elements.closeItemCodeFlyoutBtn?.addEventListener('click', closeItemCodeFlyout);
   elements.itemCodeFlyoutOverlay?.addEventListener('click', closeItemCodeFlyout);
   elements.addItemCodeBtn?.addEventListener('click', upsertItemCodeFromFlyout);
@@ -3343,6 +3521,9 @@
   });
 
   setColumnButtonsEnabled(false);
+  loadPersistedOutputFolderHandles().catch((error) => {
+    console.warn('Failed to load saved output folders.', error);
+  });
   state.learningStore = loadLearningStore();
   state.craftByItemCodeStore = loadCraftByItemCodeStore();
   if (elements.exportPdfBtn) {
