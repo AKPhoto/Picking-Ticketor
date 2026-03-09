@@ -39,7 +39,8 @@
     isProcessingDrawing: false,
     materialTypeManuallyChanged: false,
     pendingCellSelectTimer: null,
-    pendingCellSelectTarget: null
+    pendingCellSelectTarget: null,
+    activeEditableCellBeforeMouseDown: null
   };
   const OCR_LEARNING_STORAGE_KEY = 'matcon_ocr_learning_v1';
   const USER_ITEM_CODE_STORAGE_KEY = 'matcon_item_code_user_catalog_v1';
@@ -2967,6 +2968,21 @@
     invalidateGeneratedTicketState();
   });
   elements.deleteRowBtn?.addEventListener('click', deleteSelectedTableRow);
+  elements.ocrTableBody.addEventListener('mousedown', (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const clickedEditableCell = target.closest('td[contenteditable="true"]');
+    if (!clickedEditableCell) {
+      state.activeEditableCellBeforeMouseDown = null;
+      return;
+    }
+
+    const activeElement = document.activeElement;
+    state.activeEditableCellBeforeMouseDown =
+      activeElement instanceof HTMLElement && activeElement.tagName === 'TD' && activeElement.getAttribute('contenteditable') === 'true'
+        ? activeElement
+        : null;
+  });
   elements.ocrTableBody.addEventListener('click', (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
@@ -2983,7 +2999,9 @@
     }
 
     const editableCell = target.closest('td[contenteditable="true"]');
-    if (editableCell && event.detail === 1) {
+    const cameFromDifferentCell = state.activeEditableCellBeforeMouseDown !== editableCell;
+    state.activeEditableCellBeforeMouseDown = null;
+    if (editableCell && event.detail === 1 && cameFromDifferentCell) {
       queueSingleClickCellSelection(editableCell);
     }
     const row = target.closest('tr');
