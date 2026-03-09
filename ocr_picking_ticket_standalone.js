@@ -37,7 +37,9 @@
     pendingTicketCommit: null,
     hasGeneratedCurrentDrawing: false,
     isProcessingDrawing: false,
-    materialTypeManuallyChanged: false
+    materialTypeManuallyChanged: false,
+    pendingCellSelectTimer: null,
+    pendingCellSelectTarget: null
   };
   const OCR_LEARNING_STORAGE_KEY = 'matcon_ocr_learning_v1';
   const USER_ITEM_CODE_STORAGE_KEY = 'matcon_item_code_user_catalog_v1';
@@ -885,6 +887,12 @@
     return '';
   }
 
+  function getMaterialTypeLabel(value) {
+    if (value === 'SS') return 'Stainless Steel';
+    if (value === 'GS') return 'Galvanized Steel';
+    return String(value || '').trim() || 'Unknown';
+  }
+
   function autoSetMaterialTypeFromTableIfAllowed() {
     if (state.materialTypeManuallyChanged || !elements.materialType) return;
 
@@ -894,8 +902,18 @@
       const detected = detectMaterialTypeFromDescriptionText(description);
       if (!detected) continue;
       if (elements.materialType.value !== detected) {
-        elements.materialType.value = detected;
-        setStatus(`Material auto-set to ${detected === 'SS' ? 'Stainless Steel' : 'Galvanized Steel'} based on OCR description.`, false);
+        const currentMaterial = elements.materialType.value;
+        const shouldApply = window.confirm(
+          `OCR suggests changing Material from ${getMaterialTypeLabel(currentMaterial)} to ${getMaterialTypeLabel(detected)}.\n\nSelect OK to apply the change, or Cancel to keep the current material.`
+        );
+
+        if (shouldApply) {
+          elements.materialType.value = detected;
+          setStatus(`Material auto-set to ${getMaterialTypeLabel(detected)} based on OCR description.`, false);
+        } else {
+          state.materialTypeManuallyChanged = true;
+          setStatus(`Kept material as ${getMaterialTypeLabel(currentMaterial)}. Auto material changes disabled for this drawing.`, false);
+        }
       }
       return;
     }
@@ -1051,6 +1069,13 @@
 
   function clearItemCodeAppendMarkup(cell) {
     if (!cell) return;
+    const hasAppendMarkup = Boolean(cell.querySelector('.item-code-main') || cell.querySelector('.item-code-ocr-append'));
+    if (!hasAppendMarkup) {
+      const text = String(cell.textContent || '');
+      if (!/\(OCR:\s*[^)]*\)\s*$/i.test(text)) {
+        return;
+      }
+    }
     const normalized = getNormalizedItemCodeFromCell(cell);
     cell.textContent = normalized;
   }
@@ -2706,6 +2731,35 @@
     return true;
   }
 
+  function selectEntireEditableCell(cell) {
+    if (!cell || cell.getAttribute('contenteditable') !== 'true') return;
+    const range = document.createRange();
+    range.selectNodeContents(cell);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  }
+
+  function cancelPendingCellSelection() {
+    if (state.pendingCellSelectTimer) {
+      window.clearTimeout(state.pendingCellSelectTimer);
+      state.pendingCellSelectTimer = null;
+    }
+    state.pendingCellSelectTarget = null;
+  }
+
+  function queueSingleClickCellSelection(cell) {
+    cancelPendingCellSelection();
+    state.pendingCellSelectTarget = cell;
+    state.pendingCellSelectTimer = window.setTimeout(() => {
+      const pendingCell = state.pendingCellSelectTarget;
+      cancelPendingCellSelection();
+      if (!pendingCell) return;
+      if (document.activeElement !== pendingCell) return;
+      selectEntireEditableCell(pendingCell);
+    }, 220);
+  }
+
   function focusEditableCellByPosition(rowIndex, columnIndex) {
     const rows = Array.from(elements.ocrTableBody.querySelectorAll('tr'));
     const targetRow = rows[rowIndex];
@@ -2714,6 +2768,7 @@
     const targetCell = cells[columnIndex];
     if (!targetCell || targetCell.getAttribute('contenteditable') !== 'true') return false;
     targetCell.focus();
+    selectEntireEditableCell(targetCell);
     setSelectedTableRow(targetRow);
     return true;
   }
@@ -2740,6 +2795,38 @@
     const rows = Array.from(elements.ocrTableBody.querySelectorAll('tr'));
     const rowIndex = rows.indexOf(row);
     if (rowIndex < 0 || columnIndex < 0 || columnIndex > 5) return false;
+
+    const nextColumnIndex = columnIndex + 1;
+    if (nextColumnIndex <= 5) {
+      return focusEditableCellByPosition(rowIndex, nextColumnIndex);
+    }
+
+    const nextRowIndex = rowIndex + 1;
+    if (nextRowIndex < rows.length) {
+      return focusEditableCellByPosition(nextRowIndex, 0);
+    }
+
+    return false;
+  }
+
+  function moveFocusByTab(row, columnIndex, reverse) {
+    const rows = Array.from(elements.ocrTableBody.querySelectorAll('tr'));
+    const rowIndex = rows.indexOf(row);
+    if (rowIndex < 0 || columnIndex < 0 || columnIndex > 5) return false;
+
+    if (reverse) {
+      const previousColumnIndex = columnIndex - 1;
+      if (previousColumnIndex >= 0) {
+        return focusEditableCellByPosition(rowIndex, previousColumnIndex);
+      }
+
+      const previousRowIndex = rowIndex - 1;
+      if (previousRowIndex >= 0) {
+        return focusEditableCellByPosition(previousRowIndex, 5);
+      }
+
+      return false;
+    }
 
     const nextColumnIndex = columnIndex + 1;
     if (nextColumnIndex <= 5) {
@@ -2860,22 +2947,33 @@
   elements.ocrTableBody.addEventListener('click', (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
+    const editableCell = target.closest('td[contenteditable="true"]');
+    if (editableCell && event.detail === 1) {
+      queueSingleClickCellSelection(editableCell);
+    }
     const row = target.closest('tr');
     if (!row) return;
     setSelectedTableRow(row);
+  });
+  elements.ocrTableBody.addEventListener('dblclick', (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const editableCell = target.closest('td[contenteditable="true"]');
+    if (!editableCell) return;
+    cancelPendingCellSelection();
   });
   elements.ocrTableBody.addEventListener('keydown', (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement) || target.tagName !== 'TD') return;
 
+    const row = target.closest('tr');
+    if (!row) return;
+    const cells = Array.from(row.querySelectorAll('td'));
+    const columnIndex = cells.indexOf(target);
+    if (columnIndex < 0 || columnIndex > 5) return;
+
     if (event.key === 'Enter') {
       event.preventDefault();
-      const row = target.closest('tr');
-      if (!row) return;
-      const cells = Array.from(row.querySelectorAll('td'));
-      const columnIndex = cells.indexOf(target);
-      if (columnIndex < 0 || columnIndex > 5) return;
-
       if (event.ctrlKey || event.metaKey) {
         moveFocusByCtrlEnter(row, columnIndex);
       } else {
@@ -2884,15 +2982,15 @@
       return;
     }
 
+    if (event.key === 'Tab') {
+      event.preventDefault();
+      moveFocusByTab(row, columnIndex, event.shiftKey);
+      return;
+    }
+
     if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'd') return;
 
     event.preventDefault();
-    const row = target.closest('tr');
-    if (!row) return;
-    const cells = Array.from(row.querySelectorAll('td'));
-    const columnIndex = cells.indexOf(target);
-    if (columnIndex < 0 || columnIndex > 5) return;
-
     const filled = fillCellFromAbove(row, columnIndex);
     if (!filled) {
       setStatus('Ctrl+D needs a row above to copy from.', true);
