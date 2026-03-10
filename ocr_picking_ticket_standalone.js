@@ -2621,7 +2621,6 @@
       setColumnButtonsEnabled(false);
       activateOcrAreaSelectionMode();
       updateColumnStatus();
-      elements.expectedItemCountField?.scrollIntoView({ block: 'start', behavior: 'auto' });
 
       if (settings.fromQueue) {
         setStatus(`Loaded ${file.name}${getQueueProgressLabel()}. Select OCR area/columns, run OCR, generate, then export to continue queue.`, false);
@@ -3475,6 +3474,9 @@
   elements.selectSizeColumnBtn.addEventListener('click', () => setActiveColumnSelection('size'));
   elements.selectQuantityColumnBtn.addEventListener('click', () => setActiveColumnSelection('quantity'));
   elements.itemCount.addEventListener('input', updateRunOcrAvailability);
+  elements.itemCount?.addEventListener('focus', () => {
+    elements.expectedItemCountField?.scrollIntoView({ block: 'start', behavior: 'auto' });
+  });
   elements.viewerWrap.addEventListener('wheel', (event) => {
     if (!elements.lockCanvasScroll?.checked) return;
     event.preventDefault();
