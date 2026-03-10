@@ -44,7 +44,9 @@
     materialTypeManuallyChanged: false,
     pendingCellSelectTimer: null,
     pendingCellSelectTarget: null,
-    activeEditableCellBeforeMouseDown: null
+    activeEditableCellBeforeMouseDown: null,
+    headerOcrSession: null,
+    headerOcrDragStart: null
   };
   const OCR_LEARNING_STORAGE_KEY = 'matcon_ocr_learning_v1';
   const USER_ITEM_CODE_STORAGE_KEY = 'matcon_item_code_user_catalog_v1';
@@ -119,6 +121,13 @@
     viewerWrap: document.getElementById('viewerWrap'),
     pdfCanvas: document.getElementById('pdfCanvas'),
     selectionOverlay: document.getElementById('selectionOverlay'),
+    headerOcrOverlay: document.getElementById('headerOcrOverlay'),
+    headerOcrModal: document.getElementById('headerOcrModal'),
+    headerOcrPrompt: document.getElementById('headerOcrPrompt'),
+    closeHeaderOcrModalBtn: document.getElementById('closeHeaderOcrModalBtn'),
+    headerOcrCanvasWrap: document.getElementById('headerOcrCanvasWrap'),
+    headerOcrCanvas: document.getElementById('headerOcrCanvas'),
+    headerSelectionOverlay: document.getElementById('headerSelectionOverlay'),
     ocrTableBody: document.querySelector('#ocrTable tbody')
   };
 
@@ -810,6 +819,13 @@
     size: 'Size',
     quantity: 'Quantity'
   };
+  const HEADER_OCR_STEPS = [
+    { key: 'operatingTemperature', label: 'Operating Temp.' },
+    { key: 'insulationType', label: 'Insulation Type' },
+    { key: 'drawingNumber', label: 'Drawing Number' },
+    { key: 'sheetNo', label: 'Sheet Number' },
+    { key: 'revision', label: 'Revision' }
+  ];
   const SELECTION_COLORS = {
     ocrArea: '#2563eb',
     pointNumber: '#16a34a',
@@ -2855,6 +2871,236 @@
     };
   }
 
+  function escapeRegex(value) {
+    return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function cleanHeaderText(value) {
+    return String(value || '').replace(/\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  function removeInsulationFromDrawingNumber(drawingNumber, insulationType) {
+    const drawing = cleanHeaderText(drawingNumber).toUpperCase();
+    const insulation = cleanHeaderText(insulationType).toUpperCase();
+    if (!drawing || !insulation) return drawing;
+
+    const insulationPattern = escapeRegex(insulation);
+    let cleaned = drawing.replace(new RegExp(`[-_/\\s]*${insulationPattern}[-_/\\s]*`, 'gi'), '-');
+    cleaned = cleaned.replace(/-{2,}/g, '-').replace(/^-+|-+$/g, '').trim();
+    return cleaned || drawing;
+  }
+
+  function getHeaderStepPromptText(stepIndex) {
+    const step = HEADER_OCR_STEPS[stepIndex];
+    if (!step) return 'Header OCR complete.';
+    return `Step ${stepIndex + 1}/${HEADER_OCR_STEPS.length}: Draw a block around ${step.label}.`;
+  }
+
+  function setHeaderOcrPrompt(message, isError) {
+    if (!elements.headerOcrPrompt) return;
+    elements.headerOcrPrompt.textContent = String(message || '');
+    elements.headerOcrPrompt.style.color = isError ? '#b91c1c' : '#334155';
+  }
+
+  function getHeaderOcrSelectionFromPoints(start, end) {
+    const wrap = elements.headerOcrCanvasWrap;
+    const canvas = elements.headerOcrCanvas;
+    if (!wrap || !canvas) return null;
+
+    const left = Math.min(start.x, end.x);
+    const top = Math.min(start.y, end.y);
+    const width = Math.abs(end.x - start.x);
+    const height = Math.abs(end.y - start.y);
+    if (width <= 8 || height <= 8) return null;
+
+    const scaleX = canvas.width / Math.max(1, canvas.clientWidth || canvas.width);
+    const scaleY = canvas.height / Math.max(1, canvas.clientHeight || canvas.height);
+    return {
+      x: Math.round(left * scaleX),
+      y: Math.round(top * scaleY),
+      width: Math.round(width * scaleX),
+      height: Math.round(height * scaleY)
+    };
+  }
+
+  function drawHeaderSelection(start, end) {
+    const overlay = elements.headerSelectionOverlay;
+    if (!overlay) return;
+
+    const x = Math.min(start.x, end.x);
+    const y = Math.min(start.y, end.y);
+    const width = Math.abs(end.x - start.x);
+    const height = Math.abs(end.y - start.y);
+
+    overlay.style.left = `${x}px`;
+    overlay.style.top = `${y}px`;
+    overlay.style.width = `${width}px`;
+    overlay.style.height = `${height}px`;
+    overlay.style.display = width > 2 && height > 2 ? 'block' : 'none';
+  }
+
+  function getHeaderCanvasPoint(clientX, clientY) {
+    const wrap = elements.headerOcrCanvasWrap;
+    const canvas = elements.headerOcrCanvas;
+    if (!wrap || !canvas) return { x: 0, y: 0 };
+
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(canvas.clientWidth || canvas.width, clientX - rect.left)),
+      y: Math.max(0, Math.min(canvas.clientHeight || canvas.height, clientY - rect.top))
+    };
+  }
+
+  async function recognizeHeaderSelection(stepKey, selection, lang) {
+    const sourceCanvas = elements.headerOcrCanvas;
+    if (!sourceCanvas) return '';
+
+    const cropCanvas = document.createElement('canvas');
+    cropCanvas.width = selection.width;
+    cropCanvas.height = selection.height;
+    const cropCtx = cropCanvas.getContext('2d');
+    cropCtx.drawImage(sourceCanvas, selection.x, selection.y, selection.width, selection.height, 0, 0, selection.width, selection.height);
+
+    const ocrConfig = {
+      tessedit_pageseg_mode: '6',
+      preserve_interword_spaces: '1'
+    };
+
+    if (stepKey === 'operatingTemperature') {
+      ocrConfig.tessedit_char_whitelist = '0123456789.-';
+    } else if (stepKey === 'sheetNo' || stepKey === 'revision') {
+      ocrConfig.tessedit_char_whitelist = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+    } else {
+      ocrConfig.tessedit_char_whitelist = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_/.';
+    }
+
+    const result = await window.Tesseract.recognize(cropCanvas, lang, {
+      ...ocrConfig,
+      logger: (message) => {
+        if (message.status === 'recognizing text' && typeof message.progress === 'number') {
+          const step = state.headerOcrSession ? HEADER_OCR_STEPS[state.headerOcrSession.stepIndex] : null;
+          const label = step?.label || 'Field';
+          setHeaderOcrPrompt(`OCR ${label}: ${Math.round(message.progress * 100)}%`, false);
+        }
+      }
+    });
+
+    return cleanHeaderText(result?.data?.text || '');
+  }
+
+  function applyHeaderOcrValue(stepKey, recognizedText) {
+    if (stepKey === 'operatingTemperature') {
+      const match = String(recognizedText || '').match(/-?\d+(?:\.\d+)?/);
+      elements.operatingTemperature.value = match ? match[0] : '';
+      return;
+    }
+
+    if (stepKey === 'insulationType') {
+      elements.insulationType.value = cleanHeaderText(recognizedText);
+      return;
+    }
+
+    if (stepKey === 'drawingNumber') {
+      const formatted = formatDrawingNumberValue(cleanHeaderText(recognizedText).replace(/\s+/g, ''));
+      const stripped = removeInsulationFromDrawingNumber(formatted, elements.insulationType?.value || '');
+      elements.drawingNumber.value = stripped;
+      return;
+    }
+
+    if (stepKey === 'sheetNo') {
+      elements.sheetNo.value = formatSheetNumberValue(cleanHeaderText(recognizedText));
+      return;
+    }
+
+    if (stepKey === 'revision') {
+      elements.revision.value = formatRevisionValue(cleanHeaderText(recognizedText));
+    }
+  }
+
+  async function renderHeaderOcrCanvas() {
+    const sourceCanvas = elements.pdfCanvas;
+    const targetCanvas = elements.headerOcrCanvas;
+    if (!sourceCanvas || !targetCanvas || !state.page) return false;
+
+    targetCanvas.width = sourceCanvas.width;
+    targetCanvas.height = sourceCanvas.height;
+    const targetCtx = targetCanvas.getContext('2d');
+    targetCtx.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
+    targetCtx.drawImage(sourceCanvas, 0, 0);
+    if (elements.headerSelectionOverlay) {
+      elements.headerSelectionOverlay.style.display = 'none';
+    }
+    return true;
+  }
+
+  async function processHeaderOcrSelection(selection) {
+    if (!state.headerOcrSession) return;
+    const step = HEADER_OCR_STEPS[state.headerOcrSession.stepIndex];
+    if (!step) return;
+
+    state.headerOcrSession.isBusy = true;
+    try {
+      setHeaderOcrPrompt(`Reading ${step.label}...`, false);
+      const lang = (elements.ocrLanguage.value || 'eng').trim() || 'eng';
+      const text = await recognizeHeaderSelection(step.key, selection, lang);
+      applyHeaderOcrValue(step.key, text);
+
+      state.headerOcrSession.stepIndex += 1;
+      if (state.headerOcrSession.stepIndex >= HEADER_OCR_STEPS.length) {
+        applyHeaderFieldFormatting();
+        closeHeaderOcrModal();
+        setStatus('Header OCR completed. Fields updated from selected blocks.', false);
+        return;
+      }
+
+      setHeaderOcrPrompt(getHeaderStepPromptText(state.headerOcrSession.stepIndex), false);
+    } catch (error) {
+      console.error(error);
+      setHeaderOcrPrompt(`Header OCR failed: ${error.message}`, true);
+      setStatus(`Header OCR failed: ${error.message}`, true);
+    } finally {
+      state.headerOcrSession.isBusy = false;
+    }
+  }
+
+  function closeHeaderOcrModal() {
+    state.headerOcrSession = null;
+    state.headerOcrDragStart = null;
+    if (elements.headerSelectionOverlay) {
+      elements.headerSelectionOverlay.style.display = 'none';
+    }
+    elements.headerOcrModal?.classList.remove('open');
+    elements.headerOcrOverlay?.classList.remove('open');
+    elements.headerOcrModal?.setAttribute('aria-hidden', 'true');
+  }
+
+  async function openHeaderOcrModal() {
+    if (!state.page) {
+      setStatus('Load a PDF first, then click Operating Temp. to run header OCR capture.', true);
+      return;
+    }
+
+    if (!window.Tesseract) {
+      setStatus('Tesseract is not available.', true);
+      return;
+    }
+
+    const rendered = await renderHeaderOcrCanvas();
+    if (!rendered) {
+      setStatus('Header OCR view could not be prepared.', true);
+      return;
+    }
+
+    state.headerOcrSession = {
+      stepIndex: 0,
+      isBusy: false
+    };
+    setHeaderOcrPrompt(getHeaderStepPromptText(0), false);
+    elements.headerOcrModal?.classList.add('open');
+    elements.headerOcrOverlay?.classList.add('open');
+    elements.headerOcrModal?.setAttribute('aria-hidden', 'false');
+  }
+
   async function runOcrOnSelection() {
     if (!window.Tesseract) {
       setStatus('Tesseract is not available.', true);
@@ -3636,6 +3882,47 @@
   });
   elements.revision?.addEventListener('blur', () => {
     elements.revision.value = formatRevisionValue(elements.revision.value);
+  });
+
+  elements.operatingTemperature?.addEventListener('click', () => {
+    openHeaderOcrModal().catch((error) => {
+      console.error(error);
+      setStatus(`Header OCR could not start: ${error.message}`, true);
+    });
+  });
+  elements.closeHeaderOcrModalBtn?.addEventListener('click', closeHeaderOcrModal);
+  elements.headerOcrOverlay?.addEventListener('click', closeHeaderOcrModal);
+
+  elements.headerOcrCanvas?.addEventListener('mousedown', (event) => {
+    if (!state.headerOcrSession || state.headerOcrSession.isBusy) return;
+    state.headerOcrDragStart = getHeaderCanvasPoint(event.clientX, event.clientY);
+    drawHeaderSelection(state.headerOcrDragStart, state.headerOcrDragStart);
+  });
+
+  window.addEventListener('mousemove', (event) => {
+    if (!state.headerOcrSession || !state.headerOcrDragStart) return;
+    const currentPoint = getHeaderCanvasPoint(event.clientX, event.clientY);
+    drawHeaderSelection(state.headerOcrDragStart, currentPoint);
+  });
+
+  window.addEventListener('mouseup', (event) => {
+    if (!state.headerOcrSession || !state.headerOcrDragStart) return;
+    const endPoint = getHeaderCanvasPoint(event.clientX, event.clientY);
+    const startPoint = state.headerOcrDragStart;
+    state.headerOcrDragStart = null;
+    drawHeaderSelection(startPoint, endPoint);
+
+    const selection = getHeaderOcrSelectionFromPoints(startPoint, endPoint);
+    if (!selection) {
+      setHeaderOcrPrompt('Selection too small. Draw a larger block around the requested field.', true);
+      return;
+    }
+
+    processHeaderOcrSelection(selection).catch((error) => {
+      console.error(error);
+      setHeaderOcrPrompt(`Header OCR failed: ${error.message}`, true);
+      setStatus(`Header OCR failed: ${error.message}`, true);
+    });
   });
 
   elements.pdfCanvas.addEventListener('mousedown', (event) => {
