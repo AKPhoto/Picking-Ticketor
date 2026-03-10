@@ -96,6 +96,7 @@
     addRowBtn: document.getElementById('addRowBtn'),
     deleteRowBtn: document.getElementById('deleteRowBtn'),
     generateBtn: document.getElementById('generateBtn'),
+    exportExcelBtn: document.getElementById('exportExcelBtn'),
     drawingProcessedBtn: document.getElementById('drawingProcessedBtn'),
     exportPdfBtn: document.getElementById('exportPdfBtn'),
     reprintBtn: document.getElementById('reprintBtn'),
@@ -1179,6 +1180,9 @@
 
     const hasRows = elements.ocrTableBody.querySelectorAll('tr').length > 0;
     elements.generateBtn.disabled = !hasRows;
+    if (elements.exportExcelBtn) {
+      elements.exportExcelBtn.disabled = !hasRows;
+    }
     if (elements.exportPdfBtn) {
       elements.exportPdfBtn.disabled = true;
     }
@@ -1272,6 +1276,9 @@
     tr.__ocrOriginal = data._original || null;
     ensureTypeNames();
     elements.generateBtn.disabled = elements.ocrTableBody.querySelectorAll('tr').length === 0;
+    if (elements.exportExcelBtn) {
+      elements.exportExcelBtn.disabled = elements.ocrTableBody.querySelectorAll('tr').length === 0;
+    }
     if (elements.exportPdfBtn) {
       elements.exportPdfBtn.disabled = true;
     }
@@ -2429,6 +2436,79 @@
     URL.revokeObjectURL(url);
   }
 
+  function buildOcrResultsExcelHtml(rows, metadata) {
+    const tableRows = Array.isArray(rows) ? rows : [];
+    const info = metadata || {};
+    const columnHeaders = ['Point Number', 'Item Code', 'Size', 'Quantity', 'Material Description', 'Project No', 'Type'];
+
+    const metadataHtml = [
+      ['Project Number', info.projectNo || ''],
+      ['Workpack Drawing Number', info.drawingNumber || ''],
+      ['Sheet Number', info.sheetNo || ''],
+      ['Revision', info.revision || '']
+    ].map(([label, value]) => (`
+      <tr>
+        <th>${escapeHtml(label)}</th>
+        <td>${escapeHtml(value)}</td>
+      </tr>
+    `)).join('');
+
+    const bodyHtml = tableRows.map((row) => (`
+      <tr>
+        <td>${escapeHtml(row.pointNumber || '')}</td>
+        <td>${escapeHtml(row.itemCode || '')}</td>
+        <td>${escapeHtml(row.size || '')}</td>
+        <td>${escapeHtml(row.quantity || '')}</td>
+        <td>${escapeHtml(row.materialDescription || row.description || '')}</td>
+        <td>${escapeHtml(row.projectNo || '')}</td>
+        <td>${escapeHtml(row.type || '')}</td>
+      </tr>
+    `)).join('');
+
+    return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    table { border-collapse: collapse; margin-bottom: 12px; }
+    th, td { border: 1px solid #000; padding: 4px 6px; text-align: left; }
+    th { font-weight: 700; }
+    .heading th { background: #f3f4f6; }
+  </style>
+</head>
+<body>
+  <table>
+    ${metadataHtml}
+  </table>
+  <table>
+    <thead>
+      <tr class="heading">${columnHeaders.map((header) => `<th>${escapeHtml(header)}</th>`).join('')}</tr>
+    </thead>
+    <tbody>
+      ${bodyHtml}
+    </tbody>
+  </table>
+</body>
+</html>`;
+  }
+
+  function exportCorrectedOcrResultsToExcel(rows) {
+    const payloadRows = Array.isArray(rows) ? rows : [];
+    const metadata = {
+      projectNo: String(elements.projectNo?.value || '').trim(),
+      drawingNumber: getDrawingNumber(),
+      sheetNo: String(elements.sheetNo?.value || '').trim(),
+      revision: String(elements.revision?.value || '').trim()
+    };
+
+    const html = buildOcrResultsExcelHtml(payloadRows, metadata);
+    const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+
+    const filename = `${sanitizeFilenamePart(metadata.projectNo, 'PROJECT')}-${sanitizeFilenamePart(metadata.drawingNumber, 'DRAWING')}-${sanitizeFilenamePart(metadata.sheetNo, 'SHEET')}-R${sanitizeFilenamePart(metadata.revision, '00')}-OCR-Results.xls`;
+    triggerDownload(blob, filename);
+    return filename;
+  }
+
   function getQueueProgressLabel() {
     const total = state.pdfQueueFiles.length;
     const index = state.pdfQueueIndex;
@@ -2463,6 +2543,7 @@
     resetViewerViewportPosition();
     clearCraftMissingHighlights();
     elements.generateBtn.disabled = true;
+    if (elements.exportExcelBtn) elements.exportExcelBtn.disabled = true;
     if (elements.exportPdfBtn) elements.exportPdfBtn.disabled = true;
     elements.previewCraftSelect.innerHTML = '';
     elements.previewCraftSelect.disabled = true;
@@ -2864,6 +2945,9 @@
       setSelectedTableRow(null);
       correctedWithDescriptions.forEach((row) => addRow(row));
       elements.generateBtn.disabled = false;
+      if (elements.exportExcelBtn) {
+        elements.exportExcelBtn.disabled = false;
+      }
       state.pendingTicketCommit = null;
       state.hasGeneratedCurrentDrawing = false;
       showDrawingProcessedButton(false);
@@ -3049,6 +3133,29 @@
           await resetOcrAreaAndZoom();
         }
         setStatus('Drawing processed. Ready to start the next drawing.', false);
+      }
+    } finally {
+      state.isProcessingDrawing = false;
+    }
+  }
+
+  async function processExcelExportAndMoveNext() {
+    if (state.isProcessingDrawing) {
+      return;
+    }
+
+    state.isProcessingDrawing = true;
+
+    try {
+      clearTicketWorkspaceForNextDrawing();
+      window.scrollTo(0, 0);
+
+      const moved = await loadNextPdfInQueueIfAvailable();
+      if (!moved) {
+        if (state.page) {
+          await resetOcrAreaAndZoom();
+        }
+        setStatus('Excel generated. Ready to start the next drawing.', false);
       }
     } finally {
       state.isProcessingDrawing = false;
@@ -3295,6 +3402,63 @@
     renderTicketPreview(state.lastPreviewPayload, elements.previewCraftSelect.value);
   });
   elements.openPreviewWindowBtn.addEventListener('click', openTicketPreviewWindow);
+  elements.exportExcelBtn?.addEventListener('click', async () => {
+    elements.exportExcelBtn.disabled = true;
+
+    finalizeItemCodeAppendHints();
+
+    let rows = collectRows();
+    if (rows.length === 0) {
+      alert('No rows available to export to Excel.');
+      elements.exportExcelBtn.disabled = false;
+      return;
+    }
+
+    await loadItemCodeDescriptionCatalog();
+    if (!await ensureCatalogAvailableForGeneration()) {
+      elements.exportExcelBtn.disabled = false;
+      return;
+    }
+
+    let rowsWithDescriptions = applyMaterialDescriptions(rows);
+    let missingCatalogCodes = findMissingCatalogItemCodes(rowsWithDescriptions);
+    if (missingCatalogCodes.length > 0) {
+      const result = promptToAddMissingItemCodes(missingCatalogCodes);
+      if (result.added > 0) {
+        rowsWithDescriptions = applyMaterialDescriptions(rowsWithDescriptions);
+        const tableRows = Array.from(elements.ocrTableBody.querySelectorAll('tr'));
+        tableRows.forEach((tableRow) => updateMaterialDescriptionForTableRow(tableRow));
+      }
+
+      missingCatalogCodes = findMissingCatalogItemCodes(rowsWithDescriptions);
+      if (missingCatalogCodes.length > 0) {
+        alert(
+          'Some item code(s) are still unrecognized. Add descriptions for these codes to continue:\n\n' +
+          missingCatalogCodes.join(', ')
+        );
+        setStatus('Excel export blocked: unresolved item code(s) in local catalog.', true);
+        elements.exportExcelBtn.disabled = false;
+        return;
+      }
+    }
+
+    const correctedDescriptions = enforceExactCatalogDescriptionsInTable();
+    if (correctedDescriptions > 0) {
+      rowsWithDescriptions = applyMaterialDescriptions(collectRows());
+      setStatus(`Corrected ${correctedDescriptions} material description(s) to exact catalog values.`, false);
+    }
+
+    try {
+      const filename = exportCorrectedOcrResultsToExcel(rowsWithDescriptions);
+      setStatus(`Excel spreadsheet exported: ${filename}`, false);
+      alert('Excel spreadsheet generated. Click OK to reset this drawing and move to the next one.');
+      await processExcelExportAndMoveNext();
+    } catch (error) {
+      console.error(error);
+      setStatus(`Excel export failed: ${error.message}`, true);
+      elements.exportExcelBtn.disabled = false;
+    }
+  });
   elements.generateBtn.addEventListener('click', async () => {
     elements.generateBtn.disabled = true;
 
