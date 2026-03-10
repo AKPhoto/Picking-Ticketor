@@ -114,9 +114,7 @@
     itemCodeSearchInput: document.getElementById('itemCodeSearchInput'),
     itemCodeCountLabel: document.getElementById('itemCodeCountLabel'),
     itemCodeCatalogTableBody: document.getElementById('itemCodeCatalogTableBody'),
-    previewCraftSelect: document.getElementById('previewCraftSelect'),
-    openPreviewWindowBtn: document.getElementById('openPreviewWindowBtn'),
-    ticketPreviewContainer: document.getElementById('ticketPreviewContainer'),
+    previewTicketBtn: document.getElementById('previewTicketBtn'),
     editableResultsCard: document.getElementById('editableResultsCard'),
     status: document.getElementById('status'),
     viewerWrap: document.getElementById('viewerWrap'),
@@ -1184,6 +1182,15 @@
     }
   }
 
+  function updatePreviewTicketButtonAvailability() {
+    if (!elements.previewTicketBtn) return;
+    const hasRows = elements.ocrTableBody.querySelectorAll('tr').length > 0;
+    elements.previewTicketBtn.disabled = !hasRows;
+    if (!hasRows) {
+      state.lastPreviewPayload = null;
+    }
+  }
+
   function deleteSelectedTableRow() {
     const row = state.selectedTableRow;
     if (!row || !row.parentNode) {
@@ -1204,6 +1211,7 @@
     if (elements.exportPdfBtn) {
       elements.exportPdfBtn.disabled = true;
     }
+    updatePreviewTicketButtonAvailability();
 
     state.pendingTicketCommit = null;
     state.hasGeneratedCurrentDrawing = false;
@@ -1300,6 +1308,7 @@
     if (elements.exportPdfBtn) {
       elements.exportPdfBtn.disabled = true;
     }
+    updatePreviewTicketButtonAvailability();
   }
 
   function setDescriptionNeedsAttention(cell, needsAttention) {
@@ -2075,50 +2084,38 @@
     `;
   }
 
-  function renderTicketPreview(payload, selectedSheetName) {
+  function renderTicketPreview(payload) {
     const tickets = payload?.tickets || [];
     if (!tickets.length) {
-      elements.ticketPreviewContainer.innerHTML = 'No ticket data available for preview.';
-      elements.previewCraftSelect.innerHTML = '';
-      elements.previewCraftSelect.disabled = true;
-      elements.openPreviewWindowBtn.disabled = true;
+      if (elements.previewTicketBtn) {
+        elements.previewTicketBtn.disabled = true;
+      }
+      state.lastPreviewPayload = null;
       return;
     }
 
-    elements.previewCraftSelect.innerHTML = tickets
-      .map((ticket) => `<option value="${escapeHtml(ticket.sheetName)}">${escapeHtml(ticket.craftLabel)} (${escapeHtml(ticket.ticketNo)})</option>`)
-      .join('');
-    elements.previewCraftSelect.disabled = false;
-    elements.openPreviewWindowBtn.disabled = false;
-
-    const selected = tickets.find((ticket) => ticket.sheetName === selectedSheetName) || tickets[0];
-    const pages = splitRowsIntoPages(selected.rows || [], ROWS_PER_TICKET_PAGE);
-    const firstPageRows = pages[0] || [];
-    elements.previewCraftSelect.value = selected.sheetName;
-    elements.ticketPreviewContainer.innerHTML = buildExcelStylePreviewHtml(payload, selected, {
-      rows: firstPageRows,
-      pageNumber: 1,
-      pageCount: pages.length
-    });
+    if (elements.previewTicketBtn) {
+      elements.previewTicketBtn.disabled = false;
+    }
     state.lastPreviewPayload = payload;
   }
 
-  function openTicketPreviewWindow() {
+  function openFloatingTicketPreviewWindow() {
     if (!state.lastPreviewPayload || !state.lastPreviewPayload.tickets?.length) {
       setStatus('Generate ticket data first, then open print preview.', true);
       return;
     }
 
-    const selectedSheetName = elements.previewCraftSelect.value;
-    const selectedTicket = state.lastPreviewPayload.tickets.find((ticket) => ticket.sheetName === selectedSheetName) || state.lastPreviewPayload.tickets[0];
-    const pages = splitRowsIntoPages(selectedTicket.rows || [], ROWS_PER_TICKET_PAGE);
-    const previewHtml = pages.map((rows, index) => `
-      <div class="preview-page">${buildExcelStylePreviewHtml(state.lastPreviewPayload, selectedTicket, {
-        rows,
-        pageNumber: index + 1,
-        pageCount: pages.length
-      })}</div>
-    `).join('');
+    const previewHtml = state.lastPreviewPayload.tickets.map((ticket) => {
+      const pages = splitRowsIntoPages(ticket.rows || [], ROWS_PER_TICKET_PAGE);
+      return pages.map((rows, index) => `
+        <div class="preview-page">${buildExcelStylePreviewHtml(state.lastPreviewPayload, ticket, {
+          rows,
+          pageNumber: index + 1,
+          pageCount: pages.length
+        })}</div>
+      `).join('');
+    }).join('');
 
     const popup = window.open('', '_blank', 'width=1000,height=900');
     if (!popup) {
@@ -2158,6 +2155,36 @@
       </html>
     `);
     popup.document.close();
+  }
+
+  async function previewCurrentTickets() {
+    finalizeItemCodeAppendHints();
+
+    const rows = collectRows();
+    if (rows.length === 0) {
+      setStatus('No rows available to preview.', true);
+      return;
+    }
+
+    await loadItemCodeDescriptionCatalog();
+    if (!await ensureCatalogAvailableForGeneration()) {
+      return;
+    }
+
+    let rowsWithDescriptions = applyMaterialDescriptions(rows);
+    const correctedDescriptions = enforceExactCatalogDescriptionsInTable();
+    if (correctedDescriptions > 0) {
+      rowsWithDescriptions = applyMaterialDescriptions(collectRows());
+    }
+
+    const payload = buildTicketPayload(rowsWithDescriptions);
+    if (!payload) {
+      return;
+    }
+
+    renderTicketPreview(payload);
+    openFloatingTicketPreviewWindow();
+    setStatus('Preview opened. Tickets not generated yet.', false);
   }
 
   function normalizeRevisionForFilename(value) {
@@ -2563,10 +2590,9 @@
     elements.generateBtn.disabled = true;
     if (elements.exportExcelBtn) elements.exportExcelBtn.disabled = true;
     if (elements.exportPdfBtn) elements.exportPdfBtn.disabled = true;
-    elements.previewCraftSelect.innerHTML = '';
-    elements.previewCraftSelect.disabled = true;
-    elements.openPreviewWindowBtn.disabled = true;
-    elements.ticketPreviewContainer.innerHTML = 'Generate picking tickets to load preview.';
+    if (elements.previewTicketBtn) {
+      elements.previewTicketBtn.disabled = true;
+    }
     state.lastPreviewPayload = null;
     state.ticketNumbersReserved = false;
     state.currentRenderedTicketCount = 0;
@@ -2576,6 +2602,7 @@
     state.headerOcrLockedForCurrentDrawing = false;
     showDrawingProcessedButton(false);
     removeSelectionHighlights();
+    updatePreviewTicketButtonAvailability();
   }
 
   async function loadPdfFile(file, options) {
@@ -3462,6 +3489,7 @@
     if (elements.selectOcrAreaBtn?.disabled) return;
     activateOcrAreaSelectionMode();
     setOcrAreaButtonLocked(true);
+    elements.selectOcrAreaBtn?.scrollIntoView({ block: 'start', behavior: 'auto' });
   });
   elements.resetOcrAreaBtn.addEventListener('click', () => {
     resetOcrAreaAndZoom().catch((error) => {
@@ -3474,9 +3502,6 @@
   elements.selectSizeColumnBtn.addEventListener('click', () => setActiveColumnSelection('size'));
   elements.selectQuantityColumnBtn.addEventListener('click', () => setActiveColumnSelection('quantity'));
   elements.itemCount.addEventListener('input', updateRunOcrAvailability);
-  elements.itemCount?.addEventListener('focus', () => {
-    elements.expectedItemCountField?.scrollIntoView({ block: 'start', behavior: 'auto' });
-  });
   elements.viewerWrap.addEventListener('wheel', (event) => {
     if (!elements.lockCanvasScroll?.checked) return;
     event.preventDefault();
@@ -3669,11 +3694,12 @@
     }
     invalidateGeneratedTicketState();
   });
-  elements.previewCraftSelect.addEventListener('change', () => {
-    if (!state.lastPreviewPayload) return;
-    renderTicketPreview(state.lastPreviewPayload, elements.previewCraftSelect.value);
+  elements.previewTicketBtn?.addEventListener('click', () => {
+    previewCurrentTickets().catch((error) => {
+      console.error(error);
+      setStatus(`Preview failed: ${error.message}`, true);
+    });
   });
-  elements.openPreviewWindowBtn.addEventListener('click', openTicketPreviewWindow);
   elements.exportExcelBtn?.addEventListener('click', async () => {
     elements.exportExcelBtn.disabled = true;
 
