@@ -3172,6 +3172,7 @@
 
   elements.renderBtn?.addEventListener('click', renderFirstPage);
   elements.pdfInput?.addEventListener('click', () => {
+    elements.pdfInput.value = '';
     const drawing = getDrawingNumber();
     if (!drawing) return;
     setStatus(`Select the PDF for drawing ${drawing}.`, false);
@@ -3627,7 +3628,13 @@
   elements.sheetNo?.addEventListener('change', () => {
     elements.sheetNo.value = formatSheetNumberValue(elements.sheetNo.value);
   });
+  elements.sheetNo?.addEventListener('blur', () => {
+    elements.sheetNo.value = formatSheetNumberValue(elements.sheetNo.value);
+  });
   elements.revision?.addEventListener('change', () => {
+    elements.revision.value = formatRevisionValue(elements.revision.value);
+  });
+  elements.revision?.addEventListener('blur', () => {
     elements.revision.value = formatRevisionValue(elements.revision.value);
   });
 

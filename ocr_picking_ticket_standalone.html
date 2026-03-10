@@ -9,12 +9,13 @@
     .container { max-width: 1280px; margin: 0 auto; padding: 1rem; }
     .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
     .row { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0.75rem; }
-    .row.single-line-fields { display: flex; gap: 0.75rem; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 0.25rem; }
-    .row.single-line-fields .field { flex: 0 0 170px; min-width: 170px; }
-    .row.single-line-fields .field.field-pdf { flex-basis: 260px; min-width: 260px; }
+    .row.single-line-fields { display: grid; grid-template-columns: repeat(9, minmax(92px, 1fr)); gap: 0.6rem; }
+    .row.single-line-fields .field { min-width: 0; }
+    .row.single-line-fields .field.field-pdf { grid-column: 1 / span 2; }
+    .row.single-line-fields .field.field-ocr-language { grid-column: 3 / span 1; }
     .field { display: flex; flex-direction: column; gap: 0.3rem; }
     .field label { font-size: 0.85rem; color: #475569; }
-    .field input, .field select { border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.5rem 0.6rem; font-size: 0.9rem; }
+    .field input, .field select { border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.4rem 0.5rem; font-size: 0.86rem; }
     .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
     .toolbar-row { display: flex; justify-content: space-between; align-items: flex-end; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.8rem; }
     .toolbar-left, .toolbar-right { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
@@ -91,7 +92,7 @@
         <div class="field"><label>Sheet No</label><input id="sheetNo" placeholder="e.g. 006"></div>
         <div class="field"><label>Revision</label><input id="revision" placeholder="e.g. 01"></div>
         <div class="field field-pdf"><label>PDF File</label><input id="pdfInput" type="file" accept="application/pdf,.pdf"></div>
-        <div class="field"><label>OCR Language</label><input id="ocrLanguage" value="eng"></div>
+        <div class="field field-ocr-language"><label>OCR Language</label><input id="ocrLanguage" value="eng"></div>
       </div>
       <div class="toolbar-row">
         <div class="toolbar-left">
