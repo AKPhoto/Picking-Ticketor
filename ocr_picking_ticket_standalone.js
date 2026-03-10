@@ -46,7 +46,8 @@
     pendingCellSelectTarget: null,
     activeEditableCellBeforeMouseDown: null,
     headerOcrSession: null,
-    headerOcrDragStart: null
+    headerOcrDragStart: null,
+    headerOcrLockedForCurrentDrawing: false
   };
   const OCR_LEARNING_STORAGE_KEY = 'matcon_ocr_learning_v1';
   const USER_ITEM_CODE_STORAGE_KEY = 'matcon_item_code_user_catalog_v1';
@@ -2572,6 +2573,7 @@
     state.pendingTicketCommit = null;
     state.hasGeneratedCurrentDrawing = false;
     state.materialTypeManuallyChanged = false;
+    state.headerOcrLockedForCurrentDrawing = false;
     showDrawingProcessedButton(false);
     removeSelectionHighlights();
   }
@@ -3214,6 +3216,7 @@
       if (elements.exportExcelBtn) {
         elements.exportExcelBtn.disabled = false;
       }
+      state.headerOcrLockedForCurrentDrawing = correctedWithDescriptions.length > 0;
       state.pendingTicketCommit = null;
       state.hasGeneratedCurrentDrawing = false;
       showDrawingProcessedButton(false);
@@ -3905,6 +3908,9 @@
   });
 
   elements.operatingTemperature?.addEventListener('click', () => {
+    if (state.headerOcrLockedForCurrentDrawing) {
+      return;
+    }
     openHeaderOcrModal().catch((error) => {
       console.error(error);
       setStatus(`Header OCR could not start: ${error.message}`, true);
