@@ -92,6 +92,10 @@
     <h1>MatCon Standalone OCR + Picking Ticket</h1>
 
     <div class="card">
+      <div class="row sub-fields">
+        <div class="field field-pdf"><label>PDF File</label><input id="pdfInput" type="file" accept="application/pdf,.pdf"></div>
+        <div class="field field-ocr-language"><label>OCR Language</label><input id="ocrLanguage" value="eng"></div>
+      </div>
       <div class="row single-line-fields">
         <div class="field"><label>Project No</label><input id="projectNo" placeholder="e.g. AZAC149"></div>
         <div class="field"><label>Starting Ticket No</label><input id="ticketStartNo" type="number" min="1" step="1" placeholder="e.g. 930"></div>
@@ -102,10 +106,6 @@
         <div class="field"><label>Drawing Number</label><input id="drawingNumber" placeholder="e.g. SDY-237-XX14AAB-D"></div>
         <div class="field"><label>Sheet No</label><input id="sheetNo" placeholder="e.g. 006"></div>
         <div class="field"><label>Revision</label><input id="revision" placeholder="e.g. 01"></div>
-      </div>
-      <div class="row sub-fields">
-        <div class="field field-pdf"><label>PDF File</label><input id="pdfInput" type="file" accept="application/pdf,.pdf"></div>
-        <div class="field field-ocr-language"><label>OCR Language</label><input id="ocrLanguage" value="eng"></div>
       </div>
       <div class="toolbar-row">
         <div class="toolbar-left">
