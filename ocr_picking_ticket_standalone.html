@@ -228,7 +228,10 @@
         <div class="header-ocr-title">Header OCR Capture</div>
         <div id="headerOcrPrompt" class="header-ocr-prompt">Draw a block around the requested field.</div>
       </div>
-      <button id="closeHeaderOcrModalBtn" class="secondary">Close</button>
+      <div style="display:flex;gap:0.5rem;align-items:center;">
+        <button id="retakeHeaderStepBtn" class="secondary">Retake Current Step</button>
+        <button id="closeHeaderOcrModalBtn" class="secondary">Close</button>
+      </div>
     </div>
     <div id="headerOcrCanvasWrap" class="header-ocr-canvas-wrap">
       <canvas id="headerOcrCanvas"></canvas>

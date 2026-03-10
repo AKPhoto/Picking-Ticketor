@@ -124,6 +124,7 @@
     headerOcrOverlay: document.getElementById('headerOcrOverlay'),
     headerOcrModal: document.getElementById('headerOcrModal'),
     headerOcrPrompt: document.getElementById('headerOcrPrompt'),
+    retakeHeaderStepBtn: document.getElementById('retakeHeaderStepBtn'),
     closeHeaderOcrModalBtn: document.getElementById('closeHeaderOcrModalBtn'),
     headerOcrCanvasWrap: document.getElementById('headerOcrCanvasWrap'),
     headerOcrCanvas: document.getElementById('headerOcrCanvas'),
@@ -3074,6 +3075,25 @@
     elements.headerOcrModal?.setAttribute('aria-hidden', 'true');
   }
 
+  function retakeCurrentHeaderOcrStep() {
+    if (!state.headerOcrSession) {
+      setStatus('Start Header OCR first by clicking Operating Temp.', true);
+      return;
+    }
+
+    if (state.headerOcrSession.isBusy) {
+      setHeaderOcrPrompt('Please wait for the current OCR step to finish before retaking.', true);
+      return;
+    }
+
+    state.headerOcrDragStart = null;
+    if (elements.headerSelectionOverlay) {
+      elements.headerSelectionOverlay.style.display = 'none';
+    }
+
+    setHeaderOcrPrompt(getHeaderStepPromptText(state.headerOcrSession.stepIndex), false);
+  }
+
   async function openHeaderOcrModal() {
     if (!state.page) {
       setStatus('Load a PDF first, then click Operating Temp. to run header OCR capture.', true);
@@ -3890,6 +3910,7 @@
       setStatus(`Header OCR could not start: ${error.message}`, true);
     });
   });
+  elements.retakeHeaderStepBtn?.addEventListener('click', retakeCurrentHeaderOcrStep);
   elements.closeHeaderOcrModalBtn?.addEventListener('click', closeHeaderOcrModal);
   elements.headerOcrOverlay?.addEventListener('click', closeHeaderOcrModal);
 
