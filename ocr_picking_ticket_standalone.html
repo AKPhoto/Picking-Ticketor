@@ -18,12 +18,15 @@
     .field label { font-size: 0.85rem; color: #475569; }
     .field input, .field select { border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.4rem 0.5rem; font-size: 0.86rem; }
     .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    .bottom-row-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.5rem; }
+    .bottom-row-actions button { width: 100%; }
     .toolbar-row { display: flex; justify-content: space-between; align-items: flex-end; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.8rem; }
     .toolbar-left, .toolbar-right { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
     .queue-badge { display: inline-flex; align-items: center; padding: 0.35rem 0.6rem; border: 1px solid #cbd5e1; border-radius: 999px; font-size: 0.82rem; color: #334155; background: #f8fafc; }
     button { border: 1px solid #1d4ed8; background: #2563eb; color: #fff; border-radius: 6px; padding: 0.5rem 0.9rem; cursor: pointer; font-size: 0.9rem; }
     button.secondary { background: #fff; color: #1e293b; border-color: #94a3b8; }
     button.column-btn.active { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }
+    button.column-btn.selection-complete { background: #15803d; color: #fff; border-color: #15803d; }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
     #viewerWrap { position: relative; border: 1px solid #cbd5e1; border-radius: 8px; overflow: auto; max-height: 70vh; background: #fff; }
     #pdfCanvas { display: block; max-width: none; }
@@ -34,8 +37,14 @@
     th, td { border: 1px solid #e2e8f0; padding: 0.45rem; vertical-align: top; }
     td[contenteditable="true"] { background: #f8fafc; }
     td.desc-needs-attention { color: #b91c1c; font-weight: 700; }
+    #ocrTable th:nth-child(5), #ocrTable td:nth-child(5) { white-space: normal; overflow-wrap: anywhere; word-break: break-word; line-height: 1.2; }
+    #ocrTable td.desc-fit-sm { font-size: 0.78rem; }
+    #ocrTable td.desc-fit-xs { font-size: 0.72rem; }
+    .item-code-main { cursor: pointer; }
     .item-code-ocr-append { color: #dc2626; font-weight: 700; }
+    .item-code-ocr-append { cursor: pointer; }
     .item-code-ocr-append.finalized { color: #0f172a; font-weight: 400; }
+    .status-complete { background: #dcfce7; color: #166534 !important; border: 1px solid #86efac; border-radius: 6px; padding: 0.1rem 0.35rem; }
     #ocrTable tbody tr.craft-missing td { background: #fef2f2; }
     #ocrTable tbody tr.row-selected td { box-shadow: inset 0 0 0 2px #2563eb; }
     .ticket { border: 2px solid #667eea; border-radius: 8px; margin-bottom: 1rem; background: #fff; overflow: hidden; }
@@ -84,6 +93,7 @@
     #headerOcrCanvas { display: block; max-width: none; }
     #headerSelectionOverlay { position: absolute; border: 2px dashed #059669; background: rgba(5, 150, 105, 0.15); pointer-events: none; display: none; }
     .header-ocr-footer { padding: 0 1rem 0.8rem; font-size: 0.82rem; color: #475569; }
+    .post-capture-hidden { display: none !important; }
     @media (max-width: 1024px) { .row { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
     @media (max-width: 640px) { .row { grid-template-columns: 1fr; } }
   </style>
@@ -117,10 +127,11 @@
           <button id="changeSaveFoldersBtn" class="secondary">Change Save Folders</button>
           <button id="reprintBtn" class="secondary">Reprint Last Tickets</button>
           <button id="manageItemCodesBtn" class="secondary">Manage Item Codes</button>
+          <button id="drawingInfoCapturedBtn" class="secondary">Drawing info captured</button>
         </div>
       </div>
       <input id="pdfFolderInput" type="file" accept="application/pdf,.pdf" multiple webkitdirectory directory style="display:none;" />
-      <div class="card" style="margin-top:0.8rem;margin-bottom:0;">
+      <div class="card" style="margin-top:0.8rem;margin-bottom:0;" data-post-capture>
         <div id="expectedItemCountField" class="field" style="max-width:220px;">
           <label>Expected Item Count</label>
           <input id="itemCount" type="number" min="1" value="1">
@@ -142,10 +153,10 @@
           <span id="quantityColumnStatus">Quantity: Not selected</span>
         </div>
       </div>
-      <div id="status" class="status" style="margin-top:0.6rem;">Load a PDF, drag-select table area, run OCR, then generate tickets.</div>
+      <div id="status" class="status" style="margin-top:0.6rem;" data-post-capture>Load a PDF, drag-select table area, run OCR, then generate tickets.</div>
     </div>
 
-    <div class="card">
+    <div class="card" data-post-capture>
       <div class="field" style="max-width:220px;margin-bottom:0.55rem;">
         <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
           <input id="lockCanvasScroll" type="checkbox">
@@ -158,7 +169,7 @@
       </div>
     </div>
 
-    <div id="editableResultsCard" class="card">
+    <div id="editableResultsCard" class="card" data-post-capture>
       <h3>Editable OCR Results</h3>
       <div class="actions" style="margin-bottom:0.7rem;">
         <button id="addRowBtn" class="secondary">Add Row</button>
@@ -178,10 +189,10 @@
         </thead>
         <tbody></tbody>
       </table>
-      <div class="actions" style="margin-top:0.8rem;">
+      <div class="actions bottom-row-actions" style="margin-top:0.8rem;">
         <button id="exportExcelBtn" class="secondary" disabled>Export to Excel</button>
         <button id="previewTicketBtn" class="secondary" disabled>Picking Ticket Preview</button>
-        <button id="generateBtn" style="margin-left:auto;" disabled>Generate Picking Tickets</button>
+        <button id="generateBtn" disabled>Generate Picking Tickets</button>
       </div>
     </div>
   </div>

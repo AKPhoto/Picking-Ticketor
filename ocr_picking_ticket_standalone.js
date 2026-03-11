@@ -104,6 +104,7 @@
     exportPdfBtn: document.getElementById('exportPdfBtn'),
     reprintBtn: document.getElementById('reprintBtn'),
     manageItemCodesBtn: document.getElementById('manageItemCodesBtn'),
+    drawingInfoCapturedBtn: document.getElementById('drawingInfoCapturedBtn'),
     changeSaveFoldersBtn: document.getElementById('changeSaveFoldersBtn'),
     itemCodeFlyout: document.getElementById('itemCodeFlyout'),
     itemCodeFlyoutOverlay: document.getElementById('itemCodeFlyoutOverlay'),
@@ -128,7 +129,8 @@
     headerOcrCanvasWrap: document.getElementById('headerOcrCanvasWrap'),
     headerOcrCanvas: document.getElementById('headerOcrCanvas'),
     headerSelectionOverlay: document.getElementById('headerSelectionOverlay'),
-    ocrTableBody: document.querySelector('#ocrTable tbody')
+    ocrTableBody: document.querySelector('#ocrTable tbody'),
+    postCaptureSections: Array.from(document.querySelectorAll('[data-post-capture]'))
   };
 
   const ctx = elements.pdfCanvas.getContext('2d');
@@ -139,6 +141,14 @@
   function setStatus(message, isError) {
     elements.status.textContent = message;
     elements.status.style.color = isError ? '#b91c1c' : '#334155';
+  }
+
+  function setPostCaptureVisibility(isVisible) {
+    const visible = Boolean(isVisible);
+    (elements.postCaptureSections || []).forEach((section) => {
+      if (!section) return;
+      section.classList.toggle('post-capture-hidden', !visible);
+    });
   }
 
   function canvasToBlob(canvas, type, quality) {
@@ -911,18 +921,22 @@
     const areaSelected = Boolean(state.ocrAreaSelection);
     elements.ocrAreaStatus.textContent = `OCR Area: ${areaSelected ? 'Selected' : 'Not selected'}`;
     elements.ocrAreaStatus.style.color = areaSelected ? SELECTION_COLORS.ocrArea : '#334155';
+    elements.ocrAreaStatus.classList.toggle('status-complete', areaSelected);
+    elements.selectOcrAreaBtn?.classList.toggle('selection-complete', areaSelected);
 
     const map = [
-      ['pointNumber', elements.pointColumnStatus, 'Point'],
-      ['itemCode', elements.itemCodeColumnStatus, 'Item Code'],
-      ['size', elements.sizeColumnStatus, 'Size'],
-      ['quantity', elements.quantityColumnStatus, 'Quantity']
+      ['pointNumber', elements.pointColumnStatus, elements.selectPointColumnBtn, 'Point'],
+      ['itemCode', elements.itemCodeColumnStatus, elements.selectItemCodeColumnBtn, 'Item Code'],
+      ['size', elements.sizeColumnStatus, elements.selectSizeColumnBtn, 'Size'],
+      ['quantity', elements.quantityColumnStatus, elements.selectQuantityColumnBtn, 'Quantity']
     ];
 
-    map.forEach(([key, el, label]) => {
+    map.forEach(([key, el, button, label]) => {
       const selected = Boolean(state.columnSelections[key]);
       el.textContent = `${label}: ${selected ? 'Selected' : 'Not selected'}`;
       el.style.color = selected ? (SELECTION_COLORS[key] || '#166534') : '#334155';
+      el.classList.toggle('status-complete', selected);
+      button?.classList.toggle('selection-complete', selected);
     });
 
     updateRunOcrAvailability();
@@ -1260,19 +1274,24 @@
     return String(match[1] || '').trim();
   }
 
-  function replaceItemCodeWithOcrAppend(appendElement) {
-    if (!(appendElement instanceof HTMLElement)) return false;
-    const itemCodeCell = appendElement.closest('td[contenteditable="true"]');
+  function replaceItemCodeWithClickedText(sourceElement, sourceLabel) {
+    if (!(sourceElement instanceof HTMLElement)) return false;
+    const itemCodeCell = sourceElement.closest('td[contenteditable="true"]');
     if (!itemCodeCell) return false;
 
-    const ocrCode = extractOcrAppendCode(appendElement.textContent || '');
-    if (!ocrCode) return false;
+    let nextCode = '';
+    if (sourceElement.classList.contains('item-code-ocr-append')) {
+      nextCode = extractOcrAppendCode(sourceElement.textContent || '');
+    } else if (sourceElement.classList.contains('item-code-main')) {
+      nextCode = String(sourceElement.textContent || '').trim();
+    }
+    if (!nextCode) return false;
 
-    itemCodeCell.textContent = ocrCode;
+    itemCodeCell.textContent = nextCode;
     itemCodeCell.focus();
     selectEntireEditableCell(itemCodeCell);
     itemCodeCell.dispatchEvent(new Event('input', { bubbles: true }));
-    setStatus(`Item code replaced with OCR value: ${ocrCode}.`, false);
+    setStatus(`Item code set from ${sourceLabel}: ${nextCode}.`, false);
     return true;
   }
 
@@ -1298,6 +1317,8 @@
       <td class="typeCell">${createTypeCellHtml(`type-${rowIndex}`, selectedType)}</td>
     `;
     elements.ocrTableBody.appendChild(tr);
+    const descriptionCell = tr.querySelectorAll('td')[4];
+    fitDescriptionCellFont(descriptionCell);
     tr.dataset.typeManual = isManualType ? 'true' : 'false';
     tr.__ocrOriginal = data._original || null;
     ensureTypeNames();
@@ -1316,6 +1337,19 @@
     cell.classList.toggle('desc-needs-attention', Boolean(needsAttention));
   }
 
+  function fitDescriptionCellFont(cell) {
+    if (!cell) return;
+    const text = String(cell.textContent || '').trim();
+    cell.classList.remove('desc-fit-sm', 'desc-fit-xs');
+    if (text.length > 90) {
+      cell.classList.add('desc-fit-xs');
+      return;
+    }
+    if (text.length > 55) {
+      cell.classList.add('desc-fit-sm');
+    }
+  }
+
   function updateMaterialDescriptionForTableRow(row) {
     const cells = row.querySelectorAll('td');
     const itemCode = getNormalizedItemCodeFromCell(cells[1]);
@@ -1326,6 +1360,7 @@
     if (matchedDescription) {
       descriptionCell.textContent = matchedDescription;
       setDescriptionNeedsAttention(descriptionCell, false);
+      fitDescriptionCellFont(descriptionCell);
       autoSetMaterialTypeFromTableIfAllowed();
       return;
     }
@@ -1333,6 +1368,7 @@
     const currentDescription = String(descriptionCell.textContent || '').trim();
     if (!itemCode) {
       setDescriptionNeedsAttention(descriptionCell, false);
+      fitDescriptionCellFont(descriptionCell);
       autoSetMaterialTypeFromTableIfAllowed();
       return;
     }
@@ -1340,11 +1376,13 @@
     if (!currentDescription) {
       descriptionCell.textContent = PLACEHOLDER_DESCRIPTION_TEXT;
       setDescriptionNeedsAttention(descriptionCell, true);
+      fitDescriptionCellFont(descriptionCell);
       autoSetMaterialTypeFromTableIfAllowed();
       return;
     }
 
     setDescriptionNeedsAttention(descriptionCell, currentDescription === PLACEHOLDER_DESCRIPTION_TEXT);
+    fitDescriptionCellFont(descriptionCell);
     autoSetMaterialTypeFromTableIfAllowed();
   }
 
@@ -2587,6 +2625,9 @@
     updateColumnStatus();
     resetViewerViewportPosition();
     clearCraftMissingHighlights();
+    if (elements.itemCount) {
+      elements.itemCount.value = '1';
+    }
     elements.generateBtn.disabled = true;
     if (elements.exportExcelBtn) elements.exportExcelBtn.disabled = true;
     if (elements.exportPdfBtn) elements.exportPdfBtn.disabled = true;
@@ -2603,6 +2644,7 @@
     showDrawingProcessedButton(false);
     removeSelectionHighlights();
     updatePreviewTicketButtonAvailability();
+    setPostCaptureVisibility(false);
   }
 
   async function loadPdfFile(file, options) {
@@ -2919,10 +2961,14 @@
     return cleaned || drawing;
   }
 
-  function getHeaderStepPromptText(stepIndex) {
+  function getHeaderStepPromptText(stepIndex, phase) {
     const step = HEADER_OCR_STEPS[stepIndex];
     if (!step) return 'Header OCR complete.';
-    return `Step ${stepIndex + 1}/${HEADER_OCR_STEPS.length}: Draw a block around ${step.label}.`;
+    const mode = String(phase || 'zoomArea');
+    if (mode === 'fieldOcr') {
+      return `Step ${stepIndex + 1}/${HEADER_OCR_STEPS.length}: Draw a precise OCR block around ${step.label}.`;
+    }
+    return `Step ${stepIndex + 1}/${HEADER_OCR_STEPS.length}: Draw a block to zoom into ${step.label}.`;
   }
 
   function setHeaderOcrPrompt(message, isError) {
@@ -3046,26 +3092,83 @@
     }
   }
 
+  function drawHeaderCanvasFromBase(selection, zoomFactor) {
+    const session = state.headerOcrSession;
+    const baseCanvas = session?.baseCanvas;
+    const targetCanvas = elements.headerOcrCanvas;
+    if (!baseCanvas || !targetCanvas) return false;
+
+    const factor = Math.max(1, Number(zoomFactor) || 1);
+    if (selection) {
+      targetCanvas.width = Math.max(1, Math.round(selection.width * factor));
+      targetCanvas.height = Math.max(1, Math.round(selection.height * factor));
+      const targetCtx = targetCanvas.getContext('2d');
+      targetCtx.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
+      targetCtx.drawImage(baseCanvas, selection.x, selection.y, selection.width, selection.height, 0, 0, targetCanvas.width, targetCanvas.height);
+    } else {
+      targetCanvas.width = baseCanvas.width;
+      targetCanvas.height = baseCanvas.height;
+      const targetCtx = targetCanvas.getContext('2d');
+      targetCtx.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
+      targetCtx.drawImage(baseCanvas, 0, 0);
+    }
+
+    if (elements.headerSelectionOverlay) {
+      elements.headerSelectionOverlay.style.display = 'none';
+    }
+    if (elements.headerOcrCanvasWrap) {
+      elements.headerOcrCanvasWrap.scrollLeft = 0;
+      elements.headerOcrCanvasWrap.scrollTop = 0;
+    }
+
+    return true;
+  }
+
   async function renderHeaderOcrCanvas() {
     const sourceCanvas = elements.pdfCanvas;
     const targetCanvas = elements.headerOcrCanvas;
     if (!sourceCanvas || !targetCanvas || !state.page) return false;
 
-    targetCanvas.width = sourceCanvas.width;
-    targetCanvas.height = sourceCanvas.height;
-    const targetCtx = targetCanvas.getContext('2d');
-    targetCtx.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
-    targetCtx.drawImage(sourceCanvas, 0, 0);
-    if (elements.headerSelectionOverlay) {
-      elements.headerSelectionOverlay.style.display = 'none';
+    const baseCanvas = document.createElement('canvas');
+    baseCanvas.width = sourceCanvas.width;
+    baseCanvas.height = sourceCanvas.height;
+    const baseCtx = baseCanvas.getContext('2d');
+    baseCtx.clearRect(0, 0, baseCanvas.width, baseCanvas.height);
+    baseCtx.drawImage(sourceCanvas, 0, 0);
+
+    if (!state.headerOcrSession) {
+      state.headerOcrSession = {
+        stepIndex: 0,
+        isBusy: false,
+        phase: 'zoomArea',
+        zoomSelection: null,
+        baseCanvas
+      };
+    } else {
+      state.headerOcrSession.baseCanvas = baseCanvas;
+      state.headerOcrSession.phase = 'zoomArea';
+      state.headerOcrSession.zoomSelection = null;
     }
-    return true;
+
+    return drawHeaderCanvasFromBase(null, 1);
   }
 
   async function processHeaderOcrSelection(selection) {
     if (!state.headerOcrSession) return;
     const step = HEADER_OCR_STEPS[state.headerOcrSession.stepIndex];
     if (!step) return;
+
+    if (state.headerOcrSession.phase === 'zoomArea') {
+      state.headerOcrSession.zoomSelection = selection;
+      const zoomed = drawHeaderCanvasFromBase(selection, 2.6);
+      if (!zoomed) {
+        setHeaderOcrPrompt('Unable to apply zoom. Try again.', true);
+        return;
+      }
+      state.headerOcrSession.phase = 'fieldOcr';
+      setHeaderOcrPrompt(getHeaderStepPromptText(state.headerOcrSession.stepIndex, 'fieldOcr'), false);
+      return;
+    }
 
     state.headerOcrSession.isBusy = true;
     try {
@@ -3082,7 +3185,10 @@
         return;
       }
 
-      setHeaderOcrPrompt(getHeaderStepPromptText(state.headerOcrSession.stepIndex), false);
+      state.headerOcrSession.phase = 'zoomArea';
+      state.headerOcrSession.zoomSelection = null;
+      drawHeaderCanvasFromBase(null, 1);
+      setHeaderOcrPrompt(getHeaderStepPromptText(state.headerOcrSession.stepIndex, 'zoomArea'), false);
     } catch (error) {
       console.error(error);
       setHeaderOcrPrompt(`Header OCR failed: ${error.message}`, true);
@@ -3115,11 +3221,14 @@
     }
 
     state.headerOcrDragStart = null;
+    state.headerOcrSession.phase = 'zoomArea';
+    state.headerOcrSession.zoomSelection = null;
+    drawHeaderCanvasFromBase(null, 1);
     if (elements.headerSelectionOverlay) {
       elements.headerSelectionOverlay.style.display = 'none';
     }
 
-    setHeaderOcrPrompt(getHeaderStepPromptText(state.headerOcrSession.stepIndex), false);
+    setHeaderOcrPrompt(getHeaderStepPromptText(state.headerOcrSession.stepIndex, 'zoomArea'), false);
   }
 
   async function openHeaderOcrModal() {
@@ -3139,11 +3248,11 @@
       return;
     }
 
-    state.headerOcrSession = {
-      stepIndex: 0,
-      isBusy: false
-    };
-    setHeaderOcrPrompt(getHeaderStepPromptText(0), false);
+    state.headerOcrSession.stepIndex = 0;
+    state.headerOcrSession.isBusy = false;
+    state.headerOcrSession.phase = 'zoomArea';
+    state.headerOcrSession.zoomSelection = null;
+    setHeaderOcrPrompt(getHeaderStepPromptText(0, 'zoomArea'), false);
     elements.headerOcrModal?.classList.add('open');
     elements.headerOcrOverlay?.classList.add('open');
     elements.headerOcrModal?.setAttribute('aria-hidden', 'false');
@@ -3485,6 +3594,14 @@
     const files = elements.pdfFolderInput.files;
     await startPdfQueueFromFolder(files);
   });
+  elements.drawingInfoCapturedBtn?.addEventListener('click', () => {
+    setPostCaptureVisibility(true);
+    setStatus('Drawing info captured. Continue with OCR selection and ticket processing.', false);
+    if (elements.itemCount) {
+      elements.itemCount.focus();
+      elements.itemCount.select();
+    }
+  });
   elements.selectOcrAreaBtn.addEventListener('click', () => {
     if (elements.selectOcrAreaBtn?.disabled) return;
     activateOcrAreaSelectionMode();
@@ -3573,9 +3690,20 @@
     if (appendElement) {
       event.preventDefault();
       cancelPendingCellSelection();
-      if (replaceItemCodeWithOcrAppend(appendElement)) {
+      if (replaceItemCodeWithClickedText(appendElement, 'OCR text')) {
         const rowFromAppend = appendElement.closest('tr');
         if (rowFromAppend) setSelectedTableRow(rowFromAppend);
+        return;
+      }
+    }
+
+    const mainItemCodeElement = target.closest('.item-code-main');
+    if (mainItemCodeElement) {
+      event.preventDefault();
+      cancelPendingCellSelection();
+      if (replaceItemCodeWithClickedText(mainItemCodeElement, 'item code text')) {
+        const rowFromMainCode = mainItemCodeElement.closest('tr');
+        if (rowFromMainCode) setSelectedTableRow(rowFromMainCode);
         return;
       }
     }
@@ -3664,6 +3792,7 @@
     } else if (columnIndex === 4) {
       const cleanDescription = String(cell.textContent || '').trim();
       setDescriptionNeedsAttention(cell, cleanDescription === PLACEHOLDER_DESCRIPTION_TEXT || !cleanDescription);
+      fitDescriptionCellFont(cell);
       autoSetMaterialTypeFromTableIfAllowed();
     }
 
@@ -4054,4 +4183,5 @@
   applyHeaderFieldFormatting();
   syncTicketStartField(String(elements.projectNo?.value || '').trim() || 'default');
   updateColumnStatus();
+  setPostCaptureVisibility(false);
 })();
