@@ -151,6 +151,24 @@
     });
   }
 
+  function markDrawingInfoCaptured(options) {
+    const settings = options || {};
+    setPostCaptureVisibility(true);
+
+    if (settings.activateMainOcr !== false && state.page) {
+      activateOcrAreaSelectionMode({
+        statusMessage: settings.statusMessage || 'Drawing info captured. Drag on the PDF to select the full OCR area. The column steps will continue automatically.'
+      });
+    } else if (settings.statusMessage) {
+      setStatus(settings.statusMessage, false);
+    }
+
+    if (settings.focusItemCount && elements.itemCount) {
+      elements.itemCount.focus();
+      elements.itemCount.select();
+    }
+  }
+
   function canvasToBlob(canvas, type, quality) {
     return new Promise((resolve, reject) => {
       if (!canvas || typeof canvas.toBlob !== 'function') {
@@ -893,6 +911,54 @@
     return COLUMN_KEYS.filter((key) => state.columnSelections[key]).length;
   }
 
+  function setSelectionButtonState(activeKey) {
+    const buttonMap = {
+      ocrArea: elements.selectOcrAreaBtn,
+      pointNumber: elements.selectPointColumnBtn,
+      itemCode: elements.selectItemCodeColumnBtn,
+      size: elements.selectSizeColumnBtn,
+      quantity: elements.selectQuantityColumnBtn
+    };
+
+    Object.entries(buttonMap).forEach(([key, button]) => {
+      if (!button) return;
+      const active = key === activeKey;
+      button.classList.toggle('active', active);
+      button.classList.toggle('secondary', !active);
+    });
+  }
+
+  function getNextPendingColumnKey(currentKey) {
+    const currentIndex = COLUMN_KEYS.indexOf(currentKey);
+    for (let index = currentIndex + 1; index < COLUMN_KEYS.length; index += 1) {
+      const nextKey = COLUMN_KEYS[index];
+      if (!state.columnSelections[nextKey]) {
+        return nextKey;
+      }
+    }
+
+    return '';
+  }
+
+  function advanceColumnSelectionFlow(currentKey) {
+    const nextKey = getNextPendingColumnKey(currentKey);
+    if (nextKey) {
+      const selectedCount = getSelectedColumnsCount();
+      const statusMessage = currentKey === 'ocrArea'
+        ? `OCR area captured and zoomed. Drag on the PDF to select the ${COLUMN_LABELS[nextKey]} column.`
+        : `${COLUMN_LABELS[currentKey]} captured (${selectedCount}/4). Drag on the PDF to select the ${COLUMN_LABELS[nextKey]} column.`;
+      setActiveColumnSelection(nextKey, { clearExisting: false, statusMessage });
+      return true;
+    }
+
+    state.selectionMode = 'column';
+    state.activeColumnKey = null;
+    setSelectionButtonState(null);
+    updateRunOcrAvailability();
+    setStatus('All column areas captured. Review the indicators, then click Run OCR.', false);
+    return false;
+  }
+
   function resetColumnSelections() {
     state.columnSelections = {
       pointNumber: null,
@@ -942,63 +1008,52 @@
     updateRunOcrAvailability();
   }
 
-  function setActiveColumnSelection(columnKey) {
+  function setActiveColumnSelection(columnKey, options) {
+    const settings = options || {};
+    if (!state.page) {
+      setStatus('Load a PDF first.', true);
+      return false;
+    }
+
     if (!state.ocrAreaSelection) {
       setStatus('Select OCR Area first, then choose column buttons.', true);
-      return;
+      return false;
     }
 
     state.selectionMode = 'column';
     state.activeColumnKey = columnKey;
 
-    if (state.columnSelections[columnKey]) {
+    if (settings.clearExisting !== false && state.columnSelections[columnKey]) {
       state.columnSelections[columnKey] = null;
       renderSelectionHighlights();
       updateColumnStatus();
     }
 
-    const buttonMap = {
-      ocrArea: elements.selectOcrAreaBtn,
-      pointNumber: elements.selectPointColumnBtn,
-      itemCode: elements.selectItemCodeColumnBtn,
-      size: elements.selectSizeColumnBtn,
-      quantity: elements.selectQuantityColumnBtn
-    };
-
-    Object.entries(buttonMap).forEach(([key, button]) => {
-      if (!button) return;
-      const active = key === columnKey;
-      button.classList.toggle('active', active);
-      button.classList.toggle('secondary', !active);
-    });
-
-    setStatus(`Drag on the PDF to select the ${COLUMN_LABELS[columnKey]} column.`, false);
+    setSelectionButtonState(columnKey);
+    if (settings.setStatus !== false) {
+      setStatus(settings.statusMessage || `Drag on the PDF to select the ${COLUMN_LABELS[columnKey]} column.`, false);
+    }
+    return true;
   }
 
-  function activateOcrAreaSelectionMode() {
+  function activateOcrAreaSelectionMode(options) {
+    const settings = options || {};
+    if (!state.page) {
+      setStatus('Load a PDF first.', true);
+      return false;
+    }
+
     if (elements.selectOcrAreaBtn?.disabled) {
-      return;
+      return false;
     }
 
     state.selectionMode = 'ocrArea';
     state.activeColumnKey = null;
-
-    const buttonMap = [
-      elements.selectOcrAreaBtn,
-      elements.selectPointColumnBtn,
-      elements.selectItemCodeColumnBtn,
-      elements.selectSizeColumnBtn,
-      elements.selectQuantityColumnBtn
-    ];
-
-    buttonMap.forEach((button, index) => {
-      if (!button) return;
-      const active = index === 0;
-      button.classList.toggle('active', active);
-      button.classList.toggle('secondary', !active);
-    });
-
-    setStatus('Drag on the PDF to select the full OCR area. The view will auto-zoom to this area.', false);
+    setSelectionButtonState('ocrArea');
+    if (settings.setStatus !== false) {
+      setStatus(settings.statusMessage || 'Drag on the PDF to select the full OCR area. The view will auto-zoom to this area.', false);
+    }
+    return true;
   }
 
   async function renderPageAtScale(scale) {
@@ -1746,7 +1801,11 @@
   }
 
   function sanitizeFilenamePart(value, fallback) {
-    const clean = String(value || '').trim().replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, '_');
+    const clean = String(value || '')
+      .trim()
+      .replace(/[\\/]+/g, '.')
+      .replace(/[:*?"<>|]+/g, '-')
+      .replace(/\s+/g, '_');
     return clean || fallback;
   }
 
@@ -1894,7 +1953,6 @@
 
     const operatingTemperature = String(elements.operatingTemperature?.value || '').trim();
     const insulationType = String(elements.insulationType?.value || '').trim();
-      const drawingNumberWithInsulation = buildDrawingNumberWithInsulation(drawingNumber, insulationType);
 
     if (!operatingTemperature) {
       alert('Fill Operating Temperature before generating tickets.');
@@ -1939,7 +1997,6 @@
 
     return {
       drawingNumber,
-      drawingNumberWithInsulation,
       projectNo,
       workpackNo,
       learnedCount,
@@ -2084,7 +2141,7 @@
             <tr style="height: 26px;" class="project-input-row">
               <td colspan="3" class="input-cell">${escapeHtml(payload.projectNo)}</td>
               <td class="input-cell center-red">${escapeHtml(payload.workpackNo)}</td>
-              <td class="input-cell">${escapeHtml(payload.drawingNumberWithInsulation || payload.drawingNumber)}</td>
+              <td class="input-cell">${escapeHtml(payload.drawingNumber)}</td>
               <td class="input-cell">${escapeHtml(payload.sheetNo || '-')}</td>
               <td class="input-cell">${escapeHtml(payload.revision || '-')}</td>
             </tr>
@@ -2233,14 +2290,9 @@
 
   function buildTicketPdfFilename(payload, ticket) {
     const drawingPart = sanitizeFilenamePart(payload?.drawingNumber, 'DRAWING');
-    const insulationPart = sanitizeFilenamePart(normalizeInsulationCode(payload?.insulationType), '');
     const sheetPart = sanitizeFilenamePart(payload?.sheetNo, 'SHEET');
     const revisionPart = normalizeRevisionForFilename(payload?.revision);
-    const craftSuffix = getCraftSuffix(ticket?.sheetName);
-    if (insulationPart) {
-      return `${ticket.ticketNo}-${drawingPart}-${insulationPart}-${sheetPart}-R${revisionPart}-${craftSuffix}.pdf`;
-    }
-    return `${ticket.ticketNo}-${drawingPart}-${sheetPart}-R${revisionPart}-${craftSuffix}.pdf`;
+    return `${ticket.ticketNo}-${drawingPart}-${sheetPart}-R${revisionPart}.pdf`;
   }
 
   async function pickOutputFolder() {
@@ -2471,8 +2523,8 @@
     }
 
     const fallbackText = settings.isReprint
-      ? `Reprint complete: browser fallback used (filenames include craft suffix). Crafts: ${exportedCraftList}.`
-      : `Export complete: browser fallback used (filenames include craft suffix). Crafts: ${exportedCraftList}.`;
+      ? `Reprint complete: browser fallback used. Crafts: ${exportedCraftList}.`
+      : `Export complete: browser fallback used. Crafts: ${exportedCraftList}.`;
     setStatus(fallbackText, false);
     return true;
   }
@@ -2621,7 +2673,7 @@
     elements.selectionOverlay.style.display = 'none';
     setOcrAreaButtonLocked(false);
     setColumnButtonsEnabled(false);
-    activateOcrAreaSelectionMode();
+    setSelectionButtonState(null);
     updateColumnStatus();
     resetViewerViewportPosition();
     clearCraftMissingHighlights();
@@ -2639,6 +2691,10 @@
     state.currentRenderedTicketCount = 0;
     state.pendingTicketCommit = null;
     state.hasGeneratedCurrentDrawing = false;
+    closeHeaderOcrModal();
+    if (elements.materialType) {
+      elements.materialType.value = 'CS';
+    }
     state.materialTypeManuallyChanged = false;
     state.headerOcrLockedForCurrentDrawing = false;
     showDrawingProcessedButton(false);
@@ -2687,15 +2743,17 @@
       resetColumnSelections();
       elements.selectionOverlay.style.display = 'none';
       resetViewerViewportPosition();
+      setOcrAreaButtonLocked(false);
       setColumnButtonsEnabled(false);
-      activateOcrAreaSelectionMode();
+      setSelectionButtonState(null);
       updateColumnStatus();
-
+      setPostCaptureVisibility(true);
       if (settings.fromQueue) {
-        setStatus(`Loaded ${file.name}${getQueueProgressLabel()}. Select OCR area/columns, run OCR, generate, then export to continue queue.`, false);
+        setStatus(`Loaded ${file.name}${getQueueProgressLabel()}. Floating drawing OCR opened automatically. First capture the drawing info area.`, false);
       } else {
-        setStatus('PDF loaded. First select OCR Area and drag a block around the table. The app will auto-zoom; then capture each required column.', false);
+        setStatus('PDF loaded. Floating drawing OCR opened automatically. First capture the drawing info area.', false);
       }
+      await openHeaderOcrModal();
       return true;
     } catch (error) {
       console.error(error);
@@ -2840,17 +2898,17 @@
       updateColumnStatus();
       renderSelectionHighlights();
       await zoomToSelection(selection);
-      activateOcrAreaSelectionMode();
       elements.selectionOverlay.style.display = 'none';
-      setStatus('OCR area captured and zoomed. Now select each column button and drag each column.', false);
+      advanceColumnSelectionFlow('ocrArea');
       return;
     }
 
     if (state.activeColumnKey) {
-      state.columnSelections[state.activeColumnKey] = selection;
+      const currentColumnKey = state.activeColumnKey;
+      state.columnSelections[currentColumnKey] = selection;
       updateColumnStatus();
       renderSelectionHighlights();
-      setStatus(`${COLUMN_LABELS[state.activeColumnKey]} column captured (${getSelectedColumnsCount()}/4).`, false);
+      advanceColumnSelectionFlow(currentColumnKey);
     } else {
       setStatus('Choose a column button first, then drag to capture that column.', true);
     }
@@ -2961,14 +3019,42 @@
     return cleaned || drawing;
   }
 
+  function createCroppedCanvas(sourceCanvas, selection) {
+    if (!sourceCanvas || !selection) return null;
+
+    const cropCanvas = document.createElement('canvas');
+    cropCanvas.width = Math.max(1, selection.width);
+    cropCanvas.height = Math.max(1, selection.height);
+    const cropCtx = cropCanvas.getContext('2d');
+    cropCtx.clearRect(0, 0, cropCanvas.width, cropCanvas.height);
+    cropCtx.drawImage(
+      sourceCanvas,
+      selection.x,
+      selection.y,
+      selection.width,
+      selection.height,
+      0,
+      0,
+      cropCanvas.width,
+      cropCanvas.height
+    );
+    return cropCanvas;
+  }
+
+  function getHeaderOcrAreaPromptText() {
+    return `Step 1/${HEADER_OCR_STEPS.length + 1}: Draw a block around the full drawing info area.`;
+  }
+
   function getHeaderStepPromptText(stepIndex, phase) {
     const step = HEADER_OCR_STEPS[stepIndex];
     if (!step) return 'Header OCR complete.';
     const mode = String(phase || 'zoomArea');
+    const displayStep = stepIndex + 2;
+    const totalSteps = HEADER_OCR_STEPS.length + 1;
     if (mode === 'fieldOcr') {
-      return `Step ${stepIndex + 1}/${HEADER_OCR_STEPS.length}: Draw a precise OCR block around ${step.label}.`;
+      return `Step ${displayStep}/${totalSteps}: Draw a precise OCR block around ${step.label}.`;
     }
-    return `Step ${stepIndex + 1}/${HEADER_OCR_STEPS.length}: Draw a block to zoom into ${step.label}.`;
+    return `Step ${displayStep}/${totalSteps}: Draw a block to zoom into ${step.label}.`;
   }
 
   function setHeaderOcrPrompt(message, isError) {
@@ -3140,13 +3226,13 @@
       state.headerOcrSession = {
         stepIndex: 0,
         isBusy: false,
-        phase: 'zoomArea',
+        phase: 'ocrArea',
         zoomSelection: null,
         baseCanvas
       };
     } else {
       state.headerOcrSession.baseCanvas = baseCanvas;
-      state.headerOcrSession.phase = 'zoomArea';
+      state.headerOcrSession.phase = 'ocrArea';
       state.headerOcrSession.zoomSelection = null;
     }
 
@@ -3156,6 +3242,24 @@
   async function processHeaderOcrSelection(selection) {
     if (!state.headerOcrSession) return;
     const step = HEADER_OCR_STEPS[state.headerOcrSession.stepIndex];
+
+    if (state.headerOcrSession.phase === 'ocrArea') {
+      const croppedCanvas = createCroppedCanvas(state.headerOcrSession.baseCanvas, selection);
+      if (!croppedCanvas) {
+        setHeaderOcrPrompt('Unable to capture the drawing info area. Try again.', true);
+        return;
+      }
+
+      state.headerOcrSession.baseCanvas = croppedCanvas;
+      state.headerOcrSession.stepIndex = 0;
+      state.headerOcrSession.phase = 'zoomArea';
+      state.headerOcrSession.zoomSelection = null;
+      drawHeaderCanvasFromBase(null, 1);
+      setHeaderOcrPrompt(getHeaderStepPromptText(0, 'zoomArea'), false);
+      setStatus('Drawing info area captured. Continue with Operating Temp.', false);
+      return;
+    }
+
     if (!step) return;
 
     if (state.headerOcrSession.phase === 'zoomArea') {
@@ -3181,7 +3285,9 @@
       if (state.headerOcrSession.stepIndex >= HEADER_OCR_STEPS.length) {
         applyHeaderFieldFormatting();
         closeHeaderOcrModal();
-        setStatus('Header OCR completed. Fields updated from selected blocks.', false);
+        markDrawingInfoCaptured({
+          statusMessage: 'Header OCR completed. Drag on the PDF to select the full OCR area. The column steps will continue automatically.'
+        });
         return;
       }
 
@@ -3211,7 +3317,7 @@
 
   function retakeCurrentHeaderOcrStep() {
     if (!state.headerOcrSession) {
-      setStatus('Start Header OCR first by clicking Operating Temp.', true);
+      setStatus('Start Header OCR first by loading a PDF or clicking Operating Temp.', true);
       return;
     }
 
@@ -3221,19 +3327,28 @@
     }
 
     state.headerOcrDragStart = null;
-    state.headerOcrSession.phase = 'zoomArea';
-    state.headerOcrSession.zoomSelection = null;
-    drawHeaderCanvasFromBase(null, 1);
+    if (state.headerOcrSession.phase === 'ocrArea') {
+      drawHeaderCanvasFromBase(null, 1);
+    } else {
+      state.headerOcrSession.phase = 'zoomArea';
+      state.headerOcrSession.zoomSelection = null;
+      drawHeaderCanvasFromBase(null, 1);
+    }
     if (elements.headerSelectionOverlay) {
       elements.headerSelectionOverlay.style.display = 'none';
     }
 
-    setHeaderOcrPrompt(getHeaderStepPromptText(state.headerOcrSession.stepIndex, 'zoomArea'), false);
+    setHeaderOcrPrompt(
+      state.headerOcrSession.phase === 'ocrArea'
+        ? getHeaderOcrAreaPromptText()
+        : getHeaderStepPromptText(state.headerOcrSession.stepIndex, 'zoomArea'),
+      false
+    );
   }
 
   async function openHeaderOcrModal() {
     if (!state.page) {
-      setStatus('Load a PDF first, then click Operating Temp. to run header OCR capture.', true);
+      setStatus('Load a PDF first to run header OCR capture.', true);
       return;
     }
 
@@ -3250,9 +3365,9 @@
 
     state.headerOcrSession.stepIndex = 0;
     state.headerOcrSession.isBusy = false;
-    state.headerOcrSession.phase = 'zoomArea';
+    state.headerOcrSession.phase = 'ocrArea';
     state.headerOcrSession.zoomSelection = null;
-    setHeaderOcrPrompt(getHeaderStepPromptText(0, 'zoomArea'), false);
+    setHeaderOcrPrompt(getHeaderOcrAreaPromptText(), false);
     elements.headerOcrModal?.classList.add('open');
     elements.headerOcrOverlay?.classList.add('open');
     elements.headerOcrModal?.setAttribute('aria-hidden', 'false');
@@ -3595,17 +3710,15 @@
     await startPdfQueueFromFolder(files);
   });
   elements.drawingInfoCapturedBtn?.addEventListener('click', () => {
-    setPostCaptureVisibility(true);
-    setStatus('Drawing info captured. Continue with OCR selection and ticket processing.', false);
-    if (elements.itemCount) {
-      elements.itemCount.focus();
-      elements.itemCount.select();
+    if (!state.page) {
+      setStatus('Load a PDF first.', true);
+      return;
     }
+    markDrawingInfoCaptured({ focusItemCount: false });
   });
   elements.selectOcrAreaBtn.addEventListener('click', () => {
     if (elements.selectOcrAreaBtn?.disabled) return;
     activateOcrAreaSelectionMode();
-    setOcrAreaButtonLocked(true);
     elements.selectOcrAreaBtn?.scrollIntoView({ block: 'start', behavior: 'auto' });
   });
   elements.resetOcrAreaBtn.addEventListener('click', () => {

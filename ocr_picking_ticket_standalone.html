@@ -9,19 +9,17 @@
     .container { max-width: 1280px; margin: 0 auto; padding: 1rem; }
     .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
     .row { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0.75rem; }
-    .row.single-line-fields { display: grid; grid-template-columns: repeat(9, minmax(92px, 1fr)); gap: 0.6rem; }
-    .row.single-line-fields .field { min-width: 0; }
-    .row.sub-fields { display: grid; grid-template-columns: repeat(9, minmax(92px, 1fr)); gap: 0.6rem; margin-top: 0.6rem; }
-    .row.sub-fields .field { min-width: 0; }
-    .row.sub-fields .field.field-pdf { grid-column: span 4; }
+    .row.header-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .row.file-fields { grid-template-columns: minmax(0, 2.2fr) minmax(180px, 0.8fr); margin-top: 0.75rem; }
+    .row.detail-fields { grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 0.6rem; margin-top: 0.75rem; }
     .field { display: flex; flex-direction: column; gap: 0.3rem; }
     .field label { font-size: 0.85rem; color: #475569; }
     .field input, .field select { border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.4rem 0.5rem; font-size: 0.86rem; }
     .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
     .bottom-row-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.5rem; }
     .bottom-row-actions button { width: 100%; }
-    .toolbar-row { display: flex; justify-content: space-between; align-items: flex-end; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.8rem; }
-    .toolbar-left, .toolbar-right { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+    .control-buttons { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-top: 0.85rem; }
+    .scan-status-row { margin-top: 0.6rem; font-size: 0.85rem; color: #334155; display: flex; gap: 0.8rem; flex-wrap: wrap; }
     .queue-badge { display: inline-flex; align-items: center; padding: 0.35rem 0.6rem; border: 1px solid #cbd5e1; border-radius: 999px; font-size: 0.82rem; color: #334155; background: #f8fafc; }
     button { border: 1px solid #1d4ed8; background: #2563eb; color: #fff; border-radius: 6px; padding: 0.5rem 0.9rem; cursor: pointer; font-size: 0.9rem; }
     button.secondary { background: #fff; color: #1e293b; border-color: #94a3b8; }
@@ -94,8 +92,19 @@
     #headerSelectionOverlay { position: absolute; border: 2px dashed #059669; background: rgba(5, 150, 105, 0.15); pointer-events: none; display: none; }
     .header-ocr-footer { padding: 0 1rem 0.8rem; font-size: 0.82rem; color: #475569; }
     .post-capture-hidden { display: none !important; }
-    @media (max-width: 1024px) { .row { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-    @media (max-width: 640px) { .row { grid-template-columns: 1fr; } }
+    @media (max-width: 1024px) {
+      .row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .row.header-fields,
+      .row.file-fields,
+      .row.detail-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 640px) {
+      .row,
+      .row.header-fields,
+      .row.file-fields,
+      .row.detail-fields { grid-template-columns: 1fr; }
+      .bottom-row-actions { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
@@ -103,57 +112,48 @@
     <h1>MatCon Standalone OCR + Picking Ticket</h1>
 
     <div class="card">
-      <div class="row sub-fields">
-        <div class="field field-pdf"><label>PDF File</label><input id="pdfInput" type="file" accept="application/pdf,.pdf"></div>
-        <div class="field field-ocr-language"><label>OCR Language</label><input id="ocrLanguage" value="eng"></div>
-      </div>
-      <div class="row single-line-fields">
+      <div class="row header-fields">
         <div class="field"><label>Project No</label><input id="projectNo" placeholder="e.g. AZAC149"></div>
         <div class="field"><label>Starting Ticket No</label><input id="ticketStartNo" type="number" min="1" step="1" placeholder="e.g. 930"></div>
         <div class="field"><label>Workpack</label><input id="workpackNo" placeholder="e.g. WP1"></div>
+      </div>
+      <div class="row file-fields">
+        <div class="field"><label>PDF File</label><input id="pdfInput" type="file" accept="application/pdf,.pdf"></div>
+        <div class="field"><label>OCR Language</label><input id="ocrLanguage" value="eng"></div>
+      </div>
+      <div class="row detail-fields">
         <div class="field"><label>Operating Temp.</label><input id="operatingTemperature" type="number" step="1" placeholder="e.g. 40"></div>
         <div class="field"><label>Insulation Type</label><input id="insulationType" placeholder="e.g. None"></div>
         <div class="field"><label>Material</label><select id="materialType"><option value="CS" selected>Carbon Steel</option><option value="SS">Stainless Steel</option><option value="GS">Galvanized Steel</option></select></div>
         <div class="field"><label>Drawing Number</label><input id="drawingNumber" placeholder="e.g. SDY-237-XX14AAB-D"></div>
         <div class="field"><label>Sheet No</label><input id="sheetNo" placeholder="e.g. 006"></div>
         <div class="field"><label>Revision</label><input id="revision" placeholder="e.g. 01"></div>
-      </div>
-      <div class="toolbar-row">
-        <div class="toolbar-left">
-          <button id="loadFolderBtn" class="secondary">Load PDF Folder</button>
-          <span id="queueStatusBadge" class="queue-badge" style="display:none;">Queue: 0/0</span>
-        </div>
-        <div class="toolbar-right">
-          <button id="changeSaveFoldersBtn" class="secondary">Change Save Folders</button>
-          <button id="reprintBtn" class="secondary">Reprint Last Tickets</button>
-          <button id="manageItemCodesBtn" class="secondary">Manage Item Codes</button>
-          <button id="drawingInfoCapturedBtn" class="secondary">Drawing info captured</button>
-        </div>
+        <div class="field" id="expectedItemCountField"><label>Expected Item Count</label><input id="itemCount" type="number" min="1" value="1"></div>
       </div>
       <input id="pdfFolderInput" type="file" accept="application/pdf,.pdf" multiple webkitdirectory directory style="display:none;" />
-      <div class="card" style="margin-top:0.8rem;margin-bottom:0;" data-post-capture>
-        <div id="expectedItemCountField" class="field" style="max-width:220px;">
-          <label>Expected Item Count</label>
-          <input id="itemCount" type="number" min="1" value="1">
-        </div>
-        <div class="actions" style="margin-top:0.7rem;">
-          <button id="selectOcrAreaBtn" class="secondary column-btn">Select OCR Area</button>
-          <button id="resetOcrAreaBtn" class="secondary">Reset OCR Area / Zoom</button>
-          <button id="selectPointColumnBtn" class="secondary column-btn">Select Point Number Column</button>
-          <button id="selectItemCodeColumnBtn" class="secondary column-btn">Select Item Code Column</button>
-          <button id="selectSizeColumnBtn" class="secondary column-btn">Select Size Column</button>
-          <button id="selectQuantityColumnBtn" class="secondary column-btn">Select Quantity Column</button>
-          <button id="runOcrBtn" disabled>Run OCR</button>
-        </div>
-        <div style="margin-top:0.6rem;font-size:0.85rem;color:#334155;display:flex;gap:0.8rem;flex-wrap:wrap;">
-          <span id="ocrAreaStatus">OCR Area: Not selected</span>
-          <span id="pointColumnStatus">Point: Not selected</span>
-          <span id="itemCodeColumnStatus">Item Code: Not selected</span>
-          <span id="sizeColumnStatus">Size: Not selected</span>
-          <span id="quantityColumnStatus">Quantity: Not selected</span>
-        </div>
+      <div class="control-buttons">
+        <button id="loadFolderBtn" class="secondary">Load PDF Folder</button>
+        <button id="changeSaveFoldersBtn" class="secondary">Change Save Folders</button>
+        <button id="reprintBtn" class="secondary">Reprint Last Tickets</button>
+        <button id="manageItemCodesBtn" class="secondary">Manage Item Codes</button>
+        <button id="drawingInfoCapturedBtn" class="secondary">Drawing info captured</button>
+        <button id="selectOcrAreaBtn" class="secondary column-btn">Select OCR Area</button>
+        <button id="resetOcrAreaBtn" class="secondary">Reset OCR Area / Zoom</button>
+        <button id="selectPointColumnBtn" class="secondary column-btn">Select Point Number Column</button>
+        <button id="selectItemCodeColumnBtn" class="secondary column-btn">Select Item Code Column</button>
+        <button id="selectSizeColumnBtn" class="secondary column-btn">Select Size Column</button>
+        <button id="selectQuantityColumnBtn" class="secondary column-btn">Select Quantity Column</button>
+        <button id="runOcrBtn" disabled>Run OCR</button>
+        <span id="queueStatusBadge" class="queue-badge" style="display:none;">Queue: 0/0</span>
       </div>
-      <div id="status" class="status" style="margin-top:0.6rem;" data-post-capture>Load a PDF, drag-select table area, run OCR, then generate tickets.</div>
+      <div class="scan-status-row">
+        <span id="ocrAreaStatus">OCR Area: Not selected</span>
+        <span id="pointColumnStatus">Point: Not selected</span>
+        <span id="itemCodeColumnStatus">Item Code: Not selected</span>
+        <span id="sizeColumnStatus">Size: Not selected</span>
+        <span id="quantityColumnStatus">Quantity: Not selected</span>
+      </div>
+      <div id="status" class="status" style="margin-top:0.6rem;">Load a PDF to start the floating drawing OCR, then follow the OCR indicators to scan the table.</div>
     </div>
 
     <div class="card" data-post-capture>
@@ -244,7 +244,7 @@
       <canvas id="headerOcrCanvas"></canvas>
       <div id="headerSelectionOverlay"></div>
     </div>
-    <div class="header-ocr-footer">Capture order: Operating Temp. → Insulation Type → Drawing Number → Sheet No → Revision.</div>
+    <div class="header-ocr-footer">Capture order: Select Header OCR Area → Operating Temp. → Insulation Type → Drawing Number → Sheet No → Revision.</div>
   </section>
 
   <script src="pdf.min.js?v=20260304"></script>
