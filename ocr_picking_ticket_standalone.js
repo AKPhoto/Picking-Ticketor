@@ -47,7 +47,8 @@
     activeEditableCellBeforeMouseDown: null,
     headerOcrSession: null,
     headerOcrDragStart: null,
-    headerOcrLockedForCurrentDrawing: false
+    headerOcrLockedForCurrentDrawing: false,
+    paintSpecOverride: ''
   };
   const OCR_LEARNING_STORAGE_KEY = 'matcon_ocr_learning_v1';
   const USER_ITEM_CODE_STORAGE_KEY = 'matcon_item_code_user_catalog_v1';
@@ -75,6 +76,8 @@
     materialType: document.getElementById('materialType'),
     sheetNo: document.getElementById('sheetNo'),
     revision: document.getElementById('revision'),
+    paintSpecDisplay: document.getElementById('paintSpecDisplay'),
+    overridePaintSpecBtn: document.getElementById('overridePaintSpecBtn'),
     ocrLanguage: document.getElementById('ocrLanguage'),
     pdfInput: document.getElementById('pdfInput'),
     pdfFolderInput: document.getElementById('pdfFolderInput'),
@@ -119,6 +122,7 @@
     editableResultsCard: document.getElementById('editableResultsCard'),
     status: document.getElementById('status'),
     viewerWrap: document.getElementById('viewerWrap'),
+    ocrWorkflowCard: document.getElementById('ocrWorkflowCard'),
     pdfCanvas: document.getElementById('pdfCanvas'),
     selectionOverlay: document.getElementById('selectionOverlay'),
     headerOcrOverlay: document.getElementById('headerOcrOverlay'),
@@ -151,6 +155,72 @@
     });
   }
 
+  function getCleanPaintSpecOverride() {
+    return String(state.paintSpecOverride || '').trim();
+  }
+
+  function getPaintSpecSheetNameForDisplay(rows) {
+    const sourceRows = Array.isArray(rows) ? rows : collectRows();
+    const activeSheetNames = SHEET_ORDER.filter((sheetName) => sourceRows.some((row) => {
+      const rowSheetName = mapTypeValueToSheet(row.type);
+      return rowSheetName === sheetName && Boolean(row.type);
+    }));
+    if (activeSheetNames.length > 0) {
+      return activeSheetNames[0];
+    }
+
+    return 'Pipe';
+  }
+
+  function resolvePaintSpec(sheetName, temperatureValue, insulationText, materialType, overrideValue) {
+    const override = overrideValue === undefined
+      ? String(state.paintSpecOverride || '').trim()
+      : String(overrideValue || '').trim();
+    if (override) return override;
+    return computePaintSpec(sheetName, temperatureValue, insulationText, materialType);
+  }
+
+  function updatePaintSpecDisplay(rows) {
+    if (!elements.paintSpecDisplay) return;
+
+    const sourceRows = Array.isArray(rows) ? rows : collectRows();
+    const sheetName = getPaintSpecSheetNameForDisplay(sourceRows);
+    const temperatureValue = String(elements.operatingTemperature?.value || '').trim();
+    const hasTemperature = Boolean(temperatureValue);
+    const resolved = resolvePaintSpec(
+      sheetName,
+      elements.operatingTemperature?.value,
+      elements.insulationType?.value,
+      elements.materialType?.value,
+      state.paintSpecOverride
+    );
+
+    elements.paintSpecDisplay.value = hasTemperature || getCleanPaintSpecOverride() ? (resolved || '') : '';
+    elements.paintSpecDisplay.placeholder = getCleanPaintSpecOverride()
+      ? 'Override active'
+      : hasTemperature
+        ? 'Calculated from header values'
+        : 'Enter Operating Temp. to calculate';
+
+    if (elements.overridePaintSpecBtn) {
+      elements.overridePaintSpecBtn.textContent = getCleanPaintSpecOverride() ? 'Clear Paint Spec Override' : 'Override Paint Spec';
+    }
+  }
+
+  function promptPaintSpecOverride() {
+    const currentOverride = getCleanPaintSpecOverride();
+    const currentDisplay = String(elements.paintSpecDisplay?.value || '').trim();
+    const entered = window.prompt('Enter the paint spec to use instead of the calculated value. Leave blank to clear the override.', currentOverride || currentDisplay);
+    if (entered === null) return;
+
+    const normalized = String(entered || '').trim();
+    state.paintSpecOverride = normalized;
+    updatePaintSpecDisplay();
+    setStatus(normalized
+      ? `Paint spec override set to ${normalized}.`
+      : 'Paint spec override cleared; the calculated value is active again.', false);
+  }
+
   function markDrawingInfoCaptured(options) {
     const settings = options || {};
     setPostCaptureVisibility(true);
@@ -166,6 +236,12 @@
     if (settings.focusItemCount && elements.itemCount) {
       elements.itemCount.focus();
       elements.itemCount.select();
+    }
+
+    if (elements.ocrWorkflowCard) {
+      window.requestAnimationFrame(() => {
+        elements.ocrWorkflowCard?.scrollIntoView({ block: 'start', behavior: 'auto' });
+      });
     }
   }
 
@@ -1139,6 +1215,7 @@
         if (shouldApply) {
           elements.materialType.value = detected;
           setStatus(`Material auto-set to ${getMaterialTypeLabel(detected)} based on OCR description.`, false);
+          updatePaintSpecDisplay();
         } else {
           state.materialTypeManuallyChanged = true;
           setStatus(`Kept material as ${getMaterialTypeLabel(currentMaterial)}. Auto material changes disabled for this drawing.`, false);
@@ -1281,6 +1358,7 @@
       elements.exportPdfBtn.disabled = true;
     }
     updatePreviewTicketButtonAvailability();
+    updatePaintSpecDisplay();
 
     state.pendingTicketCommit = null;
     state.hasGeneratedCurrentDrawing = false;
@@ -1385,6 +1463,7 @@
       elements.exportPdfBtn.disabled = true;
     }
     updatePreviewTicketButtonAvailability();
+    updatePaintSpecDisplay();
   }
 
   function setDescriptionNeedsAttention(cell, needsAttention) {
@@ -2005,6 +2084,7 @@
       materialType: String(elements.materialType?.value || 'CS').trim().toUpperCase() || 'CS',
       sheetNo: elements.sheetNo.value.trim(),
       revision: elements.revision.value.trim(),
+      paintSpecOverride: getCleanPaintSpecOverride(),
       ticketStartNumber,
       ticketFinalNumber,
       grouped,
@@ -2036,7 +2116,13 @@
     const ticketNumberText = customTicketNumber || ticket.ticketNo;
     const ticketNoLabel = isReprint ? `Reprint: ${ticketNumberText}` : `${ticketNumberText}`;
     const ticketNoColor = '#b91c1c';
-    const paintSpec = computePaintSpec(ticket?.sheetName, payload?.operatingTemperature, payload?.insulationType, payload?.materialType);
+    const paintSpec = resolvePaintSpec(
+      ticket?.sheetName,
+      payload?.operatingTemperature,
+      payload?.insulationType,
+      payload?.materialType,
+      payload?.paintSpecOverride
+    );
     const logoSrc = state.logoDataUrl || './Aurex%20Logo.jpg';
     const logoCellHtml = `<span class="logo-frame"><img src="${logoSrc}" alt="Aurex" crossorigin="anonymous" class="aurex-logo" /></span>`;
 
@@ -2692,14 +2778,31 @@
     state.pendingTicketCommit = null;
     state.hasGeneratedCurrentDrawing = false;
     closeHeaderOcrModal();
+    if (elements.operatingTemperature) {
+      elements.operatingTemperature.value = '';
+    }
+    if (elements.insulationType) {
+      elements.insulationType.value = '';
+    }
+    if (elements.drawingNumber) {
+      elements.drawingNumber.value = '';
+    }
+    if (elements.sheetNo) {
+      elements.sheetNo.value = '';
+    }
+    if (elements.revision) {
+      elements.revision.value = '';
+    }
     if (elements.materialType) {
       elements.materialType.value = 'CS';
     }
     state.materialTypeManuallyChanged = false;
+    state.paintSpecOverride = '';
     state.headerOcrLockedForCurrentDrawing = false;
     showDrawingProcessedButton(false);
     removeSelectionHighlights();
     updatePreviewTicketButtonAvailability();
+    updatePaintSpecDisplay();
     setPostCaptureVisibility(false);
   }
 
@@ -2747,7 +2850,8 @@
       setColumnButtonsEnabled(false);
       setSelectionButtonState(null);
       updateColumnStatus();
-      setPostCaptureVisibility(true);
+      updatePaintSpecDisplay();
+      setPostCaptureVisibility(false);
       if (settings.fromQueue) {
         setStatus(`Loaded ${file.name}${getQueueProgressLabel()}. Floating drawing OCR opened automatically. First capture the drawing info area.`, false);
       } else {
@@ -2816,7 +2920,7 @@
   }
 
   function formatDrawingNumberValue(value) {
-    return String(value || '').toUpperCase();
+    return String(value || '').replace(/"/g, '').toUpperCase();
   }
 
   function formatSheetNumberValue(value) {
@@ -2846,6 +2950,7 @@
     if (elements.revision) {
       elements.revision.value = formatRevisionValue(elements.revision.value);
     }
+    updatePaintSpecDisplay();
   }
 
   function viewerPoint(clientX, clientY) {
@@ -3153,29 +3258,19 @@
     if (stepKey === 'operatingTemperature') {
       const match = String(recognizedText || '').match(/-?\d+(?:\.\d+)?/);
       elements.operatingTemperature.value = match ? match[0] : '';
-      return;
-    }
-
-    if (stepKey === 'insulationType') {
+    } else if (stepKey === 'insulationType') {
       elements.insulationType.value = cleanHeaderText(recognizedText);
-      return;
-    }
-
-    if (stepKey === 'drawingNumber') {
+    } else if (stepKey === 'drawingNumber') {
       const formatted = formatDrawingNumberValue(cleanHeaderText(recognizedText).replace(/\s+/g, ''));
       const stripped = removeInsulationFromDrawingNumber(formatted, elements.insulationType?.value || '');
-      elements.drawingNumber.value = stripped;
-      return;
-    }
-
-    if (stepKey === 'sheetNo') {
+      elements.drawingNumber.value = formatDrawingNumberValue(stripped);
+    } else if (stepKey === 'sheetNo') {
       elements.sheetNo.value = formatSheetNumberValue(cleanHeaderText(recognizedText));
-      return;
-    }
-
-    if (stepKey === 'revision') {
+    } else if (stepKey === 'revision') {
       elements.revision.value = formatRevisionValue(cleanHeaderText(recognizedText));
     }
+
+    updatePaintSpecDisplay();
   }
 
   function drawHeaderCanvasFromBase(selection, zoomFactor) {
@@ -3285,9 +3380,8 @@
       if (state.headerOcrSession.stepIndex >= HEADER_OCR_STEPS.length) {
         applyHeaderFieldFormatting();
         closeHeaderOcrModal();
-        markDrawingInfoCaptured({
-          statusMessage: 'Header OCR completed. Drag on the PDF to select the full OCR area. The column steps will continue automatically.'
-        });
+        updatePaintSpecDisplay();
+        setStatus('Header OCR completed. Click Drawing info captured to open the main OCR window.', false);
         return;
       }
 
@@ -3912,6 +4006,7 @@
     if (elements.exportPdfBtn) {
       elements.exportPdfBtn.disabled = true;
     }
+    updatePaintSpecDisplay();
     invalidateGeneratedTicketState();
   });
   elements.ocrTableBody.addEventListener('change', (event) => {
@@ -4144,7 +4239,17 @@
 
   elements.materialType?.addEventListener('change', () => {
     state.materialTypeManuallyChanged = true;
+    updatePaintSpecDisplay();
   });
+
+  elements.overridePaintSpecBtn?.addEventListener('click', promptPaintSpecOverride);
+
+  elements.operatingTemperature?.addEventListener('input', updatePaintSpecDisplay);
+  elements.operatingTemperature?.addEventListener('change', updatePaintSpecDisplay);
+  elements.operatingTemperature?.addEventListener('blur', updatePaintSpecDisplay);
+  elements.insulationType?.addEventListener('input', updatePaintSpecDisplay);
+  elements.insulationType?.addEventListener('change', updatePaintSpecDisplay);
+  elements.insulationType?.addEventListener('blur', updatePaintSpecDisplay);
 
   elements.ticketStartNo.addEventListener('change', () => {
     const projectNo = String(elements.projectNo?.value || '').trim() || 'default';
@@ -4294,6 +4399,7 @@
     console.warn('Catalog initialization failed.', error);
   });
   applyHeaderFieldFormatting();
+  updatePaintSpecDisplay();
   syncTicketStartField(String(elements.projectNo?.value || '').trim() || 'default');
   updateColumnStatus();
   setPostCaptureVisibility(false);

@@ -12,12 +12,22 @@
     .row.header-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .row.file-fields { grid-template-columns: minmax(0, 2.2fr) minmax(180px, 0.8fr); margin-top: 0.75rem; }
     .row.detail-fields { grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 0.6rem; margin-top: 0.75rem; }
+    .row.paint-spec-row { grid-template-columns: minmax(0, 1.4fr) auto; gap: 0.75rem; margin-top: 0.75rem; align-items: end; }
+    .paint-spec-row .field { min-width: 0; }
+    .paint-spec-row .field input[readonly] { background: #f8fafc; }
     .field { display: flex; flex-direction: column; gap: 0.3rem; }
     .field label { font-size: 0.85rem; color: #475569; }
     .field input, .field select { border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.4rem 0.5rem; font-size: 0.86rem; }
     .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
     .bottom-row-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.5rem; }
     .bottom-row-actions button { width: 100%; }
+    .scan-window { display: flex; flex-direction: column; gap: 0.85rem; }
+    .ocr-toolbar-row { display: grid; grid-template-columns: auto auto 1fr; gap: 0.5rem; align-items: center; }
+    .ocr-toolbar-row .lock-scroll-field { display: flex; align-items: center; justify-content: flex-start; min-width: 0; }
+    .ocr-toolbar-row label { cursor: pointer; }
+    .ocr-window { display: flex; flex-direction: column; gap: 0.65rem; }
+    .ocr-bottom-row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+    .ocr-status-row { font-size: 0.85rem; color: #334155; display: flex; gap: 0.8rem; flex-wrap: wrap; }
     .control-buttons { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-top: 0.85rem; }
     .scan-status-row { margin-top: 0.6rem; font-size: 0.85rem; color: #334155; display: flex; gap: 0.8rem; flex-wrap: wrap; }
     .queue-badge { display: inline-flex; align-items: center; padding: 0.35rem 0.6rem; border: 1px solid #cbd5e1; border-radius: 999px; font-size: 0.82rem; color: #334155; background: #f8fafc; }
@@ -97,12 +107,15 @@
       .row.header-fields,
       .row.file-fields,
       .row.detail-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .row.paint-spec-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .ocr-toolbar-row { grid-template-columns: 1fr; }
     }
     @media (max-width: 640px) {
       .row,
       .row.header-fields,
       .row.file-fields,
-      .row.detail-fields { grid-template-columns: 1fr; }
+      .row.detail-fields,
+      .row.paint-spec-row { grid-template-columns: 1fr; }
       .bottom-row-actions { grid-template-columns: 1fr; }
     }
   </style>
@@ -130,6 +143,16 @@
         <div class="field"><label>Revision</label><input id="revision" placeholder="e.g. 01"></div>
         <div class="field" id="expectedItemCountField"><label>Expected Item Count</label><input id="itemCount" type="number" min="1" value="1"></div>
       </div>
+      <div class="row paint-spec-row">
+        <div class="field">
+          <label>Determined Paint Spec</label>
+          <input id="paintSpecDisplay" type="text" readonly value="">
+        </div>
+        <div class="field" style="align-self:end;">
+          <label>&nbsp;</label>
+          <button id="overridePaintSpecBtn" class="secondary">Override Paint Spec</button>
+        </div>
+      </div>
       <input id="pdfFolderInput" type="file" accept="application/pdf,.pdf" multiple webkitdirectory directory style="display:none;" />
       <div class="control-buttons">
         <button id="loadFolderBtn" class="secondary">Load PDF Folder</button>
@@ -137,39 +160,45 @@
         <button id="reprintBtn" class="secondary">Reprint Last Tickets</button>
         <button id="manageItemCodesBtn" class="secondary">Manage Item Codes</button>
         <button id="drawingInfoCapturedBtn" class="secondary">Drawing info captured</button>
-        <button id="selectOcrAreaBtn" class="secondary column-btn">Select OCR Area</button>
-        <button id="resetOcrAreaBtn" class="secondary">Reset OCR Area / Zoom</button>
-        <button id="selectPointColumnBtn" class="secondary column-btn">Select Point Number Column</button>
-        <button id="selectItemCodeColumnBtn" class="secondary column-btn">Select Item Code Column</button>
-        <button id="selectSizeColumnBtn" class="secondary column-btn">Select Size Column</button>
-        <button id="selectQuantityColumnBtn" class="secondary column-btn">Select Quantity Column</button>
-        <button id="runOcrBtn" disabled>Run OCR</button>
         <span id="queueStatusBadge" class="queue-badge" style="display:none;">Queue: 0/0</span>
-      </div>
-      <div class="scan-status-row">
-        <span id="ocrAreaStatus">OCR Area: Not selected</span>
-        <span id="pointColumnStatus">Point: Not selected</span>
-        <span id="itemCodeColumnStatus">Item Code: Not selected</span>
-        <span id="sizeColumnStatus">Size: Not selected</span>
-        <span id="quantityColumnStatus">Quantity: Not selected</span>
       </div>
       <div id="status" class="status" style="margin-top:0.6rem;">Load a PDF to start the floating drawing OCR, then follow the OCR indicators to scan the table.</div>
     </div>
 
-    <div class="card" data-post-capture>
-      <div class="field" style="max-width:220px;margin-bottom:0.55rem;">
-        <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
-          <input id="lockCanvasScroll" type="checkbox">
-          <span>Lock Scroll</span>
-        </label>
+    <div id="ocrWorkflowCard" class="card scan-window post-capture-hidden" data-post-capture>
+      <div class="ocr-toolbar-row">
+        <button id="selectOcrAreaBtn" class="secondary column-btn">Select OCR Area</button>
+        <button id="resetOcrAreaBtn" class="secondary">Reset OCR Area / Zoom</button>
+        <div class="lock-scroll-field">
+          <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
+            <input id="lockCanvasScroll" type="checkbox">
+            <span>Lock Scroll</span>
+          </label>
+        </div>
       </div>
-      <div id="viewerWrap">
-        <canvas id="pdfCanvas"></canvas>
-        <div id="selectionOverlay"></div>
+      <div class="ocr-window">
+        <div id="viewerWrap">
+          <canvas id="pdfCanvas"></canvas>
+          <div id="selectionOverlay"></div>
+        </div>
+        <div class="ocr-bottom-row">
+          <button id="selectPointColumnBtn" class="secondary column-btn">Select Point Number Column</button>
+          <button id="selectItemCodeColumnBtn" class="secondary column-btn">Select Item Code Column</button>
+          <button id="selectSizeColumnBtn" class="secondary column-btn">Select Size Column</button>
+          <button id="selectQuantityColumnBtn" class="secondary column-btn">Select Quantity Column</button>
+          <button id="runOcrBtn" disabled>Run OCR</button>
+        </div>
+        <div class="ocr-status-row">
+          <span id="ocrAreaStatus">OCR Area: Not selected</span>
+          <span id="pointColumnStatus">Point: Not selected</span>
+          <span id="itemCodeColumnStatus">Item Code: Not selected</span>
+          <span id="sizeColumnStatus">Size: Not selected</span>
+          <span id="quantityColumnStatus">Quantity: Not selected</span>
+        </div>
       </div>
     </div>
 
-    <div id="editableResultsCard" class="card" data-post-capture>
+    <div id="editableResultsCard" class="card post-capture-hidden" data-post-capture>
       <h3>Editable OCR Results</h3>
       <div class="actions" style="margin-bottom:0.7rem;">
         <button id="addRowBtn" class="secondary">Add Row</button>
